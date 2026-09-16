@@ -18,7 +18,6 @@ class PlaceRequest(BaseModel):
         "other",
     ] | None = None
     subcategory: str | None = None
-    cost: Literal["low", "medium", "high", "any"] | None = None
     indoor: bool | None = None
 
 
