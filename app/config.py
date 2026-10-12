@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     use_mock_places: bool = True
     provider_timeout_seconds: float = 5.0
+    # 주변 시설 찾기: 현재 위치가 부산 밖이면 검색하지 않고 기준 장소를 묻는다.
+    # 부산 밖에서 개발/시연할 때는 false로 두면 현재 위치 그대로 검색한다.
+    nearby_busan_only: bool = True
 
     # 지도/장소 검색 API
     kakao_rest_api_key: str | None = None

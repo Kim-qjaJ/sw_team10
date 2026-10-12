@@ -1,7 +1,8 @@
 import httpx
 
 from app.config import settings
-from app.llm.base import BaseIntentParser, LLMUnavailableError
+from app.llm.base import BaseIntentParser, LLMRateLimitedError, LLMUnavailableError
+from app.schemas.intent import UserIntent
 
 
 class GroqIntentParser(BaseIntentParser):
@@ -14,7 +15,7 @@ class GroqIntentParser(BaseIntentParser):
             "Content-Type": "application/json",
         }
 
-    async def _chat(self, message: str) -> str:
+    async def _chat(self, message: str, previous_intent: UserIntent | None = None) -> str:
         if not settings.groq_api_key:
             raise LLMUnavailableError(
                 "GROQ_API_KEY가 없습니다. .env에 키를 넣거나 LLM_PROVIDER=ollama로 변경하세요."
@@ -31,12 +32,17 @@ class GroqIntentParser(BaseIntentParser):
                 },
             }
 
+        messages = [{"role": "system", "content": self.system_prompt}]
+        if previous_intent is not None:
+            messages.append({
+                "role": "assistant",
+                "content": previous_intent.model_dump_json(),
+            })
+        messages.append({"role": "user", "content": message})
+
         payload = {
             "model": settings.groq_model,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": message},
-            ],
+            "messages": messages,
             "temperature": 0,
             "response_format": response_format,
         }
@@ -54,6 +60,8 @@ class GroqIntentParser(BaseIntentParser):
                 f"Groq가 {settings.groq_timeout_seconds:g}초 안에 응답하지 않았습니다."
             ) from exc
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                raise LLMRateLimitedError("Groq API 호출 한도를 초과했습니다.") from exc
             raise LLMUnavailableError(
                 f"Groq 오류 {exc.response.status_code}: {exc.response.text[:300]}"
             ) from exc
