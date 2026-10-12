@@ -1,0 +1,36 @@
+{
+  "description": "부산 지역 사전(공공데이터 가공본)과 단순화한 행정동 경계, 생활권 사전",
+  "received_at": "2026-10-12",
+  "files": {
+    "busan_regions.csv": "구·군 16, 행정동 206, 법정동 187, 리 62 (대표 좌표, 별칭, 행정동-법정동 매핑)",
+    "busan_hdong.geojson": "행정동 206개 경계, 20m 단순화, WGS84",
+    "busan_lifestyle.csv": "생활권 이름 → 기준 시설(실행 중 카카오 조회) + 대표 행정구역(근사 fallback) + 반경. 좌표를 직접 담지 않음"
+  },
+  "sources": {
+    "boundaries": {
+      "description": "행정동 경계 2026-07-01 버전 (emd_20260701.parquet)",
+      "upstream": "통계청 통계지리정보서비스(SGIS) 행정동 경계",
+      "upstream_license": "공공누리 제1유형(출처표시)",
+      "distribution": "https://github.com/vuski/admdongkor",
+      "distribution_license": "CC BY 4.0 (가공 부분)",
+      "verified_against_original": false
+    },
+    "codes": {
+      "description": "법정동·리 코드, 행정동-법정동 매핑 (2024-08-01 시행본)",
+      "upstream": "행정안전부 「행정기관(행정동) 및 관할구역(법정동) 변경내역」",
+      "distribution": "PublicDataReader 패키지 code_bdong / code_hdong_bdong",
+      "verified_against_original": false
+    }
+  },
+  "attribution": "행정동 경계: 통계청 SGIS(공공누리 제1유형), vuski/admdongkor(CC BY 4.0). 법정동 코드: 행정안전부.",
+  "coordinate_reference": "CRS84: longitude, latitude in degrees",
+  "coordinate_sources": {
+    "boundary": "행정구역 경계 중심점. 건물 위치가 아님",
+    "same_name_hdong": "이름이 같은 행정동 경계의 중심점 (행정동 기준으로 정확)",
+    "hdong_union": "연결된 행정동들을 합친 영역의 중심점 (근사)",
+    "emd_parent": "소속 읍·면 중심점. 개별 마을 위치가 아님 (근사)"
+  },
+  "radius_usage": "busan_regions.csv의 radius_m은 영역 크기(같은 면적의 원 반지름)이며 검색 제외 기준이 아니라 거리 점수 스케일로만 쓴다. busan_lifestyle.csv의 radius_m은 생활권 추천 반경이다.",
+  "boundary_usage": "행정동 경계만 정확하다. 법정동·리 범위는 행정동 경계로 근사한다.",
+  "regeneration": "저장소 밖의 build_busan_regions.py로 생성했다. 지리 라이브러리는 서버 런타임 의존성에 넣지 않는다."
+}

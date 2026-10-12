@@ -2,18 +2,24 @@ import httpx
 
 from app.config import settings
 from app.llm.base import BaseIntentParser, LLMUnavailableError
+from app.schemas.intent import UserIntent
 
 
 class OllamaIntentParser(BaseIntentParser):
     provider_name = "ollama"
 
-    async def _chat(self, message: str) -> str:
+    async def _chat(self, message: str, previous_intent: UserIntent | None = None) -> str:
+        messages = [{"role": "system", "content": self.system_prompt}]
+        if previous_intent is not None:
+            messages.append({
+                "role": "assistant",
+                "content": previous_intent.model_dump_json(),
+            })
+        messages.append({"role": "user", "content": message})
+
         payload = {
             "model": settings.ollama_model,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": message},
-            ],
+            "messages": messages,
             "format": self.schema if settings.ollama_structured_output else "json",
             "stream": False,
             "keep_alive": settings.ollama_keep_alive,
