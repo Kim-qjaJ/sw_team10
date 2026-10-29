@@ -4,28 +4,27 @@ AI 기반 부산 맞춤형 장소 추천 및 안내 서비스 팀 프로젝트 �
 
 ## 현재 상태
 
-전체 구조(채팅 처리 흐름, LLM 해석, Local Router, 부산 지역 사전, 파이프라인, 데이터 형식)는 구현되어 있고,
-**GUI · API · 추천 알고리즘** 파일은 인터페이스(클래스·함수 이름과 입출력 형식)만 정의된 뼈대입니다.
-뼈대 상태에서도 서버는 실행되며, `USE_MOCK_PLACES=true`(기본값)이면 샘플 장소 데이터로 전체 흐름을 확인할 수 있습니다.
-
-개인 선행 실험과 전체 동작 검증은 별도 `new_sw_prototype` 저장소에서 진행합니다.
+**1차 증분**: 전체 구조(채팅 처리 흐름, LLM 해석, Local Router, 부산 지역 사전, 파이프라인, 데이터 형식)에
+**GUI · API · 추천 알고리즘** 구현을 통합했습니다.
+`USE_MOCK_PLACES=true`(기본값)이면 API 키 없이 샘플 장소 데이터로 전체 흐름을 확인할 수 있고,
+`false`로 바꾸고 `.env`에 키를 넣으면 실제 API로 검색합니다.
 
 ## 역할별 파일
 
 | 담당 | 파일 | 상태 |
 |---|---|---|
-| GUI | `app/static/index.html`, `app.js`, `style.css` | 빈 파일 |
-| API | `app/providers/kakao.py`, `naver.py`, `busan.py`, `tour.py`, `weather.py` | 뼈대 |
-| API | `app/services/api_router.py`, `context_service.py` | 뼈대 |
-| 추천 알고리즘 | `app/services/place_merger.py`, `recommendation.py`, `scoring.py`, `hard_filter.py`, `exact_place_matcher.py` | 뼈대 |
+| GUI | `app/static/` (`index.html`, `app.js`, `map.js`, `image-upload.js`, `ui-utils.js`, `style.css`) | 1차 구현 |
+| API | `app/providers/kakao.py`, `naver.py`, `busan.py`, `tour.py`, `weather.py` | 1차 구현 |
+| API | `app/services/api_router.py`, `context_service.py` | 1차 구현 |
+| 추천 알고리즘 | `app/services/place_merger.py`, `recommendation.py`, `scoring.py`, `hard_filter.py`, `exact_place_matcher.py` | 1차 구현 |
 | 구조·AI·통합 | 그 밖의 모든 파일 | 구현됨 |
 
-뼈대 파일에는 `[API 담당]`, `[추천 알고리즘 담당]` 표시와 `TODO`가 있습니다.
-**함수 이름과 입출력 형식은 바꾸지 말고 내부만 구현해 주세요.** 형식을 바꿔야 하면 먼저 구조 담당과 상의합니다.
+**함수 이름과 입출력 형식은 바꾸지 말고 내부만 수정해 주세요.** 형식을 바꿔야 하면 먼저 구조 담당과 상의합니다.
+작업은 `feature/...` 브랜치에 올리고, main에는 통합 후 반영합니다.
 
 공용 파일(수정 시 상의):
 - `app/providers/base.py`: Provider 공통 인터페이스 (`PlaceProvider.search`)
-- `app/providers/mock.py`: 샘플 데이터 (API 구현 전 GUI·추천 개발용)
+- `app/providers/mock.py`: 샘플 데이터 (`USE_MOCK_PLACES=true`일 때 API 키 없이 GUI·추천 확인용)
 - `app/schemas/`: 모든 모듈이 주고받는 데이터 형식 (`Place`, `PlaceRequest`, `UserIntent`, 응답 형식)
 
 아직 쓰지 않는 파일: `place_normalizer.py`, `recommendation_service.py`, `accessibility_service.py`
@@ -66,7 +65,7 @@ response_writer.py → RecommendResponse → GUI
 | `recommendation.py` | `RecommendationService().rank(intent, request, places, limit, anchor, radius_m, sort_by_distance, stations, weather, score_anchor, distance_scale_m)` | 점수를 채운 `list[Place]` |
 | `exact_place_matcher.py` | `institution_locations / match / representative / related_branches(query, places)` | `list[Place]` 또는 `Place`/`None` |
 
-각 파일의 docstring에 인자의 의미와 채워야 할 필드를 적어 두었습니다.
+Provider는 HTTP 오류를 직접 처리하지 않고 예외로 올립니다. `APIRouterService`가 Provider별 상태(`ok` / `not_configured` / `timeout` / `rate_limited` / `error`)로 기록합니다.
 
 ## 폴더 구조
 
@@ -89,8 +88,10 @@ app/
 │   ├── mode_router.py, followup.py, response_writer.py
 │   ├── api_router.py, context_service.py                                       [API]
 │   └── place_merger.py, recommendation.py, scoring.py, hard_filter.py, exact_place_matcher.py   [추천]
-└── static/                 [GUI]
+└── static/                 [GUI] 화면, 지도(Leaflet), 이미지 미리보기
 tests/                      외부 API·LLM 없이 도는 테스트
+frontend-tests/smoke.py     [GUI] 브라우저 스모크 테스트 (Playwright)
+docs/FRONTEND_HANDOFF.md    [GUI] 프론트엔드 작업 기록
 ```
 
 ## 실행 방법
@@ -121,7 +122,11 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 ## 테스트
 
 ```bash
-python -m pytest
+python -m pytest                       # 백엔드 테스트 (외부 API·LLM 불필요)
+
+# 프론트 스모크 테스트: Mock 서버를 8000 포트로 띄운 상태에서 실행
+pip install playwright && playwright install chromium
+python frontend-tests/smoke.py
 ```
 
 ## 데이터 출처
