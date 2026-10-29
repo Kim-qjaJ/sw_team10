@@ -1,1 +1,273 @@
-
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <title>부산 한걸음 · 부산 장소 안내</title>
+    <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
+    <link rel="stylesheet" href="/static/style.css" />
+    <script defer src="/static/vendor/leaflet/leaflet.js"></script>
+    <script type="module" src="/static/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#message">검색창으로 건너뛰기</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="홈"
+        ><span data-service-name>부산 한걸음</span
+        ><span class="brand-caption">A LOCAL GUIDE TO BUSAN</span></a
+      >
+      <nav aria-label="주요 메뉴">
+        <a href="#explore">장소 찾기</a><a href="#map-title">지도 보기</a>
+      </nav>
+      <span class="header-caption">머무르고 싶은 부산을 찾아서</span>
+    </header>
+    <main>
+      <section class="intro" aria-labelledby="intro-title">
+        <img
+          class="hero-image"
+          src="/static/images/gwangan.jpg"
+          alt="부산 광안대교 아래 바다와 요트"
+          fetchpriority="high"
+          width="2200"
+          height="3300"
+        />
+        <div class="hero-content">
+          <p class="eyebrow">BUSAN, AT YOUR OWN PACE</p>
+          <h1 id="intro-title">바다 곁에서,<br />나만의 부산을.</h1>
+          <p class="hero-description">
+            익숙한 골목부터 처음 만나는 풍경까지.<br />오늘의 발걸음이 향할 곳을
+            찾아보세요.
+          </p>
+          <a class="hero-link" href="#explore"
+            >부산 둘러보기 <span aria-hidden="true">↗</span></a
+          >
+        </div>
+        <div class="hero-caption">
+          <span>광안대교 · 부산 수영구</span><span>01 — THE COAST</span>
+        </div>
+      </section>
+      <div class="content-wrap">
+        <div class="chapter-heading" id="explore">
+          <div>
+            <p class="eyebrow">FIND YOUR PLACE</p>
+            <h2>어디에서 시작할까요.</h2>
+          </div>
+          <p>
+            동네와 취향을 적어 주세요.<br />가까운 장소를 함께 살펴볼 수
+            있습니다.
+          </p>
+        </div>
+        <div class="workspace">
+          <section class="search-panel panel" aria-labelledby="search-title">
+            <div class="section-heading">
+              <h2 id="search-title">장소 찾기</h2>
+              <span class="step-label">01 — SEARCH</span>
+            </div>
+            <form id="search-form" novalidate>
+              <fieldset class="modes">
+                <legend class="sr-only">검색 방식</legend>
+                <label
+                  ><input type="radio" name="mode" value="search" /><span
+                    >장소 검색</span
+                  ></label
+                ><label
+                  ><input
+                    type="radio"
+                    name="mode"
+                    value="recommend"
+                    checked
+                  /><span>장소 추천</span></label
+                ><label
+                  ><input type="radio" name="mode" value="nearby" /><span
+                    >주변 시설 찾기</span
+                  ></label
+                >
+              </fieldset>
+              <p id="mode-help" class="hint">
+                동네와 취향을 알려주시면 장소를 추천해 드려요.
+              </p>
+              <div id="category-wrap" class="form-row">
+                <label for="category">추천 카테고리</label
+                ><select id="category">
+                  <option value="">질문에서 자동 선택</option>
+                  <option value="restaurant">음식점</option>
+                  <option value="cafe">카페</option>
+                  <option value="culture">문화시설</option>
+                </select>
+              </div>
+              <label class="input-label" for="message"
+                >궁금한 장소나 원하는 조건</label
+              >
+              <textarea
+                id="message"
+                rows="4"
+                maxlength="500"
+                placeholder="예: 서면 카페 추천해줘"
+                aria-describedby="input-help"
+                required
+              ></textarea>
+              <div class="input-meta">
+                <span id="input-help">Enter 검색 · Shift+Enter 줄바꿈</span
+                ><span id="char-count">0 / 500</span>
+              </div>
+              <div class="examples">
+                <span>이렇게 물어보세요</span
+                ><button type="button" data-query="서면 카페 추천해줘">
+                  서면 카페</button
+                ><button type="button" data-query="해운대 맛집 알려줘">
+                  해운대 맛집
+                </button>
+              </div>
+              <div class="location-box">
+                <div class="button-row">
+                  <button type="button" id="locate">◎ 현재 위치 사용</button
+                  ><button
+                    type="button"
+                    id="clear-location"
+                    class="text-button"
+                    hidden
+                  >
+                    위치 해제
+                  </button>
+                </div>
+                <p id="location-status" class="hint" role="status">
+                  위치 없이도 검색할 수 있어요. 질문에 지역을 적어 주세요.
+                </p>
+              </div>
+              <div class="submit-row">
+                <label for="limit"
+                  >결과 수
+                  <select id="limit">
+                    <option value="5">5개</option>
+                    <option value="10">10개</option>
+                    <option value="20">20개</option>
+                  </select></label
+                ><button id="submit" class="primary" type="submit">
+                  장소 찾아보기 <span aria-hidden="true">→</span>
+                </button>
+              </div>
+            </form>
+            <details class="photo-section">
+              <summary>
+                사진으로 장소 찾기 <span class="tag">분석 준비 중</span>
+              </summary>
+              <p class="hint">
+                사진 선택과 미리보기만 제공해요. 사진은 서버로 전송되지 않아요.
+              </p>
+              <label class="file-label" for="image-input"
+                >사진 선택 · JPG / PNG / WebP (최대 5MB)</label
+              ><input
+                type="file"
+                id="image-input"
+                accept="image/jpeg,image/png,image/webp"
+              />
+              <div id="image-preview-wrap" hidden>
+                <img id="image-preview" alt="선택한 사진 미리보기" />
+                <p id="image-name"></p>
+                <button id="remove-image" type="button">사진 제거</button>
+              </div>
+              <p id="image-status" role="status">
+                사진 분석 기능은 준비 중입니다.
+              </p>
+              <button type="button" disabled>사진 분석 준비 중</button>
+              <div id="image-analysis-result" aria-live="polite" hidden></div>
+            </details>
+            <button type="button" id="new-session" class="text-button">
+              새 대화 시작
+            </button>
+            <p class="privacy hint">
+              질문과 사용에 동의한 위치만 서버에 전달해요. 위치 해제 시 이전
+              위치를 참조하지 않도록 새 대화를 시작해요.
+            </p>
+          </section>
+          <section class="map-panel panel" aria-labelledby="map-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">02 — MAP</p>
+                <h2 id="map-title">지도로 살펴보기</h2>
+              </div>
+              <button id="map-retry" type="button">지도 다시 표시</button>
+            </div>
+            <div id="map" aria-label="부산 장소 지도"></div>
+            <p id="map-status" role="status">지도를 준비하고 있어요.</p>
+            <p id="map-result-status" class="hint">
+              검색하면 좌표가 있는 장소가 여기에 표시돼요.
+            </p>
+            <p class="map-credit">
+              지도: ©
+              <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noopener noreferrer"
+                >OpenStreetMap 기여자</a
+              >
+              ·
+              <a
+                href="https://www.openstreetmap.org/fixthemap"
+                target="_blank"
+                rel="noopener noreferrer"
+                >지도 오류 제보</a
+              >
+            </p>
+          </section>
+        </div>
+        <section
+          class="results-section"
+          aria-labelledby="results-title"
+          aria-busy="false"
+        >
+          <div class="section-heading">
+            <h2 id="results-title">찾은 장소</h2>
+            <span id="result-count" class="hint"
+              >검색한 장소가 이곳에 표시됩니다</span
+            >
+          </div>
+          <div id="feedback" role="status" class="feedback" hidden></div>
+          <div id="error" role="alert" class="error" hidden>
+            <p id="error-text"></p>
+            <button id="retry" type="button">다시 시도</button>
+          </div>
+          <div id="answer" class="answer panel" hidden>
+            <span class="eyebrow">검색 안내</span
+            ><span id="mock-label" class="tag sample" hidden>샘플 데이터</span>
+            <p id="answer-message"></p>
+            <p id="notice" class="notice" hidden></p>
+            <p id="response-meta" class="hint"></p>
+            <div id="response-links" class="button-row"></div>
+            <div
+              id="suggestions"
+              class="button-row"
+              aria-label="후속 질문"
+            ></div>
+          </div>
+          <div id="results">
+            <div class="empty panel">
+              <span class="empty-symbol" aria-hidden="true">—</span>
+              <h3>다음 발걸음은 어디인가요?</h3>
+              <p>
+                동네와 장소를 입력하면 검색 결과와 지도를 함께 볼 수 있어요.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+    <footer>
+      <div class="footer-brand">
+        <span data-service-name>부산 한걸음</span>
+        <p>부산을 천천히, 당신의 걸음으로.</p>
+      </div>
+      <div class="footer-notes">
+        <p>소프트웨어공학 10팀 · 개발 미리보기</p>
+        <p>장소 정보는 방문 전 확인해 주세요.</p>
+        <a
+          href="https://unsplash.com/photos/jCETCzIgO0c"
+          target="_blank"
+          rel="noopener noreferrer"
+          >사진 C J / Unsplash</a
+        >
+      </div>
+    </footer>
+  </body>
+</html>

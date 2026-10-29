@@ -18,7 +18,7 @@ class BusanProvider(PlaceProvider):
         radius_m: int | None = None,
     ) -> list[Place]:
         # 1. API 키 확인
-        api_key = settings.PUBLIC_DATA_API_KEY
+        api_key = settings.public_data_service_key
         if not api_key:
             raise ProviderNotConfigured("공공데이터포털 API 키가 설정되지 않았습니다.")
 
@@ -30,13 +30,10 @@ class BusanProvider(PlaceProvider):
         }
 
         # 2. 비동기 HTTP 요청
-        async with httpx.AsyncClient(timeout=settings.PROVIDER_TIMEOUT_SECONDS) as client:
-            try:
-                response = await client.get(BUSAN_EXHIBITION_URL, params=params)
-                response.raise_for_status()
-                data = response.json()
-            except Exception:
-                return []
+        async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
+            response = await client.get(BUSAN_EXHIBITION_URL, params=params)
+            response.raise_for_status()
+            data = response.json()
 
         # 3. 응답 데이터를 공통 Place 객체로 변환
         try:

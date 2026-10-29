@@ -46,8 +46,8 @@ class WeatherProvider:
 
     async def get_weather(self, latitude: float, longitude: float) -> dict | None:
         # 1. API 키 확인
-        api_key = settings.PUBLIC_DATA_API_KEY
-        if not api_key:
+        api_key = settings.public_data_service_key
+        if not api_key or not settings.kma_api_url:
             return None
 
         nx, ny = self._dfs_xy(latitude, longitude)
@@ -71,9 +71,9 @@ class WeatherProvider:
         }
 
         # 3. 비동기 HTTP 요청
-        async with httpx.AsyncClient(timeout=settings.PROVIDER_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
             try:
-                response = await client.get(settings.KMA_API_URL, params=params)
+                response = await client.get(settings.kma_api_url, params=params)
                 response.raise_for_status()
                 data = response.json()
             except Exception:

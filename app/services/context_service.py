@@ -4,7 +4,7 @@ from app.config import settings
 from app.providers.weather import WeatherProvider
 from app.schemas.place import Place
 
-RAIN_WORDS = {"비 오", "비옴", "비가", "비 와", "우천", "우산", "장마", "소나기", "눈 오", "눈옴", "눈이 와"}
+RAIN_WORDS = ("비 오", "비오", "비옴", "비가", "비 와", "비와", "우천", "우산", "장마", "소나기", "눈 오", "눈오", "눈옴", "눈이 와")
 
 def mentions_rain(text: str | None) -> bool:
     """사용자 문장에 비/눈 관련 표현이 있는지 확인한다."""
@@ -34,7 +34,7 @@ class ContextService:
         if cache_key in self._stations_cache:
             return self._stations_cache[cache_key]
 
-        api_key = settings.KAKAO_REST_API_KEY
+        api_key = settings.kakao_rest_api_key
         if not api_key:
             return []
 
@@ -49,7 +49,7 @@ class ContextService:
             "sort": "distance",
         }
 
-        async with httpx.AsyncClient(timeout=settings.PROVIDER_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
             try:
                 response = await client.get(url, headers=headers, params=params)
                 response.raise_for_status()

@@ -4,7 +4,6 @@ from app.providers.base import PlaceProvider, ProviderNotConfigured
 from app.schemas.intent import PlaceRequest
 from app.schemas.place import Place
 
-TOUR_SEARCH_URL = f"{settings.TOUR_API_URL}/searchKeyword2"
 
 class TourProvider(PlaceProvider):
     name = "tour"
@@ -18,9 +17,12 @@ class TourProvider(PlaceProvider):
         radius_m: int | None = None,
     ) -> list[Place]:
         # 1. API 키 및 URL 확인
-        api_key = settings.PUBLIC_DATA_API_KEY
+        api_key = settings.public_data_service_key
         if not api_key:
             raise ProviderNotConfigured("TourAPI용 공공데이터포털 API 키가 설정되지 않았습니다.")
+        if not settings.tour_api_url:
+            raise ProviderNotConfigured("TOUR_API_URL이 설정되지 않았습니다.")
+        tour_search_url = f"{settings.tour_api_url.rstrip('/')}/searchKeyword2"
 
         # 2. 검색 키워드 조합
         query_text = request.query
@@ -39,13 +41,10 @@ class TourProvider(PlaceProvider):
         }
 
         # 3. 비동기 HTTP 요청
-        async with httpx.AsyncClient(timeout=settings.PROVIDER_TIMEOUT_SECONDS) as client:
-            try:
-                response = await client.get(TOUR_SEARCH_URL, params=params)
-                response.raise_for_status()
-                data = response.json()
-            except Exception:
-                return []
+        async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
+            response = await client.get(tour_search_url, params=params)
+            response.raise_for_status()
+            data = response.json()
 
         # 4. TourAPI 응답을 공통 Place 객체 리스트로 변환
         try:

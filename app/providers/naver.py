@@ -18,8 +18,8 @@ class NaverProvider(PlaceProvider):
         anchor: tuple[float, float] | None = None,
         radius_m: int | None = None,
     ) -> list[Place]:
-        client_id = settings.NAVER_CLIENT_ID
-        client_secret = settings.NAVER_CLIENT_SECRET
+        client_id = settings.naver_client_id
+        client_secret = settings.naver_client_secret
         if not client_id or not client_secret:
             raise ProviderNotConfigured("Naver API 키가 설정되지 않았습니다.")
 
@@ -37,13 +37,10 @@ class NaverProvider(PlaceProvider):
             "sort": "random",
         }
 
-        async with httpx.AsyncClient(timeout=settings.PROVIDER_TIMEOUT_SECONDS) as client:
-            try:
-                response = await client.get(NAVER_SEARCH_URL, headers=headers, params=params)
-                response.raise_for_status()
-                data = response.json()
-            except Exception:
-                return []
+        async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
+            response = await client.get(NAVER_SEARCH_URL, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
 
         items = data.get("items", [])
         places: list[Place] = []
