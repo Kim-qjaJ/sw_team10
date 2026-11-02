@@ -60,6 +60,20 @@ def in_provider_order(
     return ordered[:limit]
 
 
+def apply_rain_hint(weather: dict | None, rain_hint: bool) -> dict | None:
+    """사용자가 '비 오는데'라고 말했으면 실제 관측과 관계없이 비 오는 날로 계산한다.
+
+    관측상 비가 오지 않는데 사용자 말로 바꾼 경우 user_hint=True를 남겨,
+    답변에서 '지금 비가 와서'가 아니라 '비가 온다고 하셔서'라고 말하게 한다.
+    """
+    if not rain_hint:
+        return weather
+    if weather and weather.get("is_raining"):
+        return weather
+    return {**(weather or {}), "is_raining": True, "precipitation": "rain", "user_hint": True,
+            "source": (weather or {}).get("source", "user")}
+
+
 def in_busan(place: Place) -> bool:
     """주소가 있는 후보는 부산 주소인지 확인한다. 주소가 없으면 판단하지 않고 남긴다."""
     return not place.address or "부산" in place.address
@@ -241,11 +255,12 @@ class RecommendationPipeline:
                 if point is None and region is not None:
                     point = (region.latitude, region.longitude)
                 if not weather_checked:
-                    weather = await self.context.weather(point)
-                    if rain_hint:
-                        weather = {**(weather or {}), "is_raining": True, "source": (weather or {}).get("source", "user")}
+                    # 날씨와 지하철역은 서로 기다릴 필요가 없으므로 동시에 조회한다 (NFR-001 응답 시간).
+                    weather, stations = await asyncio.gather(self.context.weather(point), self.context.stations(point))
+                    weather = apply_rain_hint(weather, rain_hint)
                     weather_checked = True
-                stations = await self.context.stations(point)
+                else:
+                    stations = await self.context.stations(point)
                 context_ms += (time.perf_counter() - context_started) * 1000
                 ranking_started = time.perf_counter()
                 ranked = self.recommender.rank(

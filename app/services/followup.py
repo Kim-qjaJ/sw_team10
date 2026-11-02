@@ -11,9 +11,9 @@ from app.schemas.intent import UserIntent
 from app.services.local_router import COMPARE_PATTERN, build_category_requests, parse_message, requested_route
 
 EXPAND_PATTERN = re.compile(r"넓|멀리|반경|범위")
-# 반경을 넓힐 때 쓰는 단계(m). 현재 반경보다 큰 첫 값으로 넓힌다.
-EXPAND_STEPS_M = (1000, 1500, 3000, 5000, 10000)
-MAX_EXPAND_M = 10000
+# 반경을 넓힐 때 쓰는 단계(m). 현재 반경보다 큰 첫 값으로 넓힌다. (SRS FR-036: 1.5km → 3km → 5km, 최대 5km)
+EXPAND_STEPS_M = (1500, 3000, 5000)
+MAX_EXPAND_M = EXPAND_STEPS_M[-1]
 
 
 @dataclass

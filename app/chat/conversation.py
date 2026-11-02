@@ -20,7 +20,9 @@ from app.schemas.intent import UserIntent
 from app.services.context_service import mentions_rain
 from app.services.followup import FollowupPlan
 from app.services.local_router import format_route, route_place_query
-from app.services.response_writer import ResponseWriter
+from app.chat.timing import MIN_SUMMARY_SECONDS, remaining_budget
+from app.config import settings
+from app.services.response_writer import ResponseWriter, with_weather
 
 
 async def handle_conversation(ctx, request: ChatRequest, message: str, started: float) -> RecommendResponse:
@@ -144,16 +146,22 @@ async def handle_conversation(ctx, request: ChatRequest, message: str, started: 
         response.notice = fallback_notice
 
     # 결과 설명: 명확한 질의는 템플릿 문장, LLM이 해석한 복합 조건은 LLM이 설명한다.
+    # 두 경우 모두 순위에 반영된 날씨가 있으면 한 문장으로 덧붙인다.
     response_llm_ms = 0.0
     summary = None
+    weather = (response.context or {}).get("weather")
     if intent.intent != "unsupported" and response.results:
-        if route_type == "llm":
+        # 요청 전체 제한 시간(30초) 안에서 남은 시간만 LLM 요약에 쓴다. 부족하면 템플릿 문장으로 대신한다.
+        remaining = remaining_budget(started)
+        if route_type == "llm" and remaining >= MIN_SUMMARY_SECONDS:
             summary, response_llm_ms = await ctx.response_writer.write(
                 user_message=message,
                 intent=intent,
                 results=response.results,
+                timeout=min(settings.groq_timeout_seconds, remaining),
             )
-        summary = summary or ResponseWriter.template_summary(intent, response.results)
+            summary = with_weather(summary, weather, response.results, intent.location)
+        summary = summary or ResponseWriter.template_summary(intent, response.results, weather)
     # 결과가 없으면 notice가 이유를 설명하므로 사용자 문장을 그대로 되돌려주지 않는다.
     response.message = summary
 

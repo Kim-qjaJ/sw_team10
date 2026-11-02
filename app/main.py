@@ -11,14 +11,17 @@ import time
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.chat.intents import normalize_search_modes, parse_intent
 from app.chat.service import handle_chat
+from app.chat.responses import simple_response
 from app.chat.session import SessionStore
+from app.chat.timing import REQUEST_TIMEOUT_NOTICE
 from app.config import BASE_DIR, settings
+from app.db import QueryLogger, SupabaseClient
 from app.llm.factory import create_intent_parser
 from app.schemas.api import ChatRequest, IntentRecommendRequest, RecommendResponse
 from app.schemas.intent import UserIntent
@@ -38,6 +41,14 @@ async def lifespan(app: FastAPI):
     app.state.pipeline = RecommendationPipeline()
     app.state.response_writer = ResponseWriter(client)
     app.state.sessions = SessionStore()
+    # 질의 로그(Supabase). 꺼져 있거나 URL·키가 없으면 아무것도 저장하지 않는다.
+    app.state.db = SupabaseClient(
+        client,
+        settings.supabase_url if settings.query_log_enabled else None,
+        settings.supabase_secret_key if settings.query_log_enabled else None,
+        timeout=settings.supabase_timeout_seconds,
+    )
+    app.state.query_logger = QueryLogger(app.state.db)
     # 로컬 Ollama는 워밍업하고, 클라우드 Provider는 기본적으로 no-op이다.
     warm_up_task = asyncio.create_task(app.state.intent_parser.warm_up())
     yield
@@ -79,6 +90,8 @@ async def status():
             "weather": bool(public_key_ready and settings.kma_api_url),
         },
         "public_data_key_loaded": public_key_ready,
+        "query_log": app.state.db.status(),
+        "request_timeout_seconds": settings.request_timeout_seconds,
     }
 
 
@@ -104,9 +117,19 @@ async def intent_only(request: ChatRequest):
 
 
 @app.post("/api/v1/recommend", response_model=RecommendResponse)
-async def recommend(request: ChatRequest):
-    """GUI용 진입점. 처리 흐름은 app/chat/service.py를 참고한다."""
-    return await handle_chat(app.state, request)
+async def recommend(request: ChatRequest, background_tasks: BackgroundTasks):
+    """GUI용 진입점. 처리 흐름은 app/chat/service.py를 참고한다.
+
+    요청 전체를 request_timeout_seconds(기본 30초) 안에 끝낸다 (SRS NFR-001).
+    질의 로그는 응답을 보낸 뒤 백그라운드에서 저장해 응답 시간에 영향을 주지 않는다.
+    """
+    started = time.perf_counter()
+    try:
+        response = await asyncio.wait_for(handle_chat(app.state, request), timeout=settings.request_timeout_seconds)
+    except asyncio.TimeoutError:
+        response = simple_response(None, UserIntent(intent="unsupported"), started, "api", notice=REQUEST_TIMEOUT_NOTICE)
+    background_tasks.add_task(app.state.query_logger.log, request, response)
+    return response
 
 
 @app.post("/api/v1/recommend/intent", response_model=RecommendResponse)
