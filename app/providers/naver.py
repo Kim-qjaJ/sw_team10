@@ -5,8 +5,7 @@ from app.providers.base import PlaceProvider, ProviderNotConfigured
 from app.schemas.intent import PlaceRequest
 from app.schemas.place import Place
 
-# .env의 NAVER_CLIENT_ID/SECRET은 네이버 클라우드(NCP) API Gateway 키이므로 NCP 지역 검색 주소를 쓴다.
-NAVER_SEARCH_URL = "https://naverapihub.apigw.ntruss.com/search/v1/local"
+NAVER_SEARCH_URL = "https://openapi.naver.com/v1/search/local.json"
 
 class NaverProvider(PlaceProvider):
     name = "naver"
@@ -29,8 +28,8 @@ class NaverProvider(PlaceProvider):
             query_text = f"{location} {query_text}"
 
         headers = {
-            "X-NCP-APIGW-API-KEY-ID": client_id.strip(),
-            "X-NCP-APIGW-API-KEY": client_secret.strip(),
+            "X-Naver-Client-Id": client_id,
+            "X-Naver-Client-Secret": client_secret,
         }
         params = {
             "query": query_text,
@@ -39,9 +38,12 @@ class NaverProvider(PlaceProvider):
         }
 
         async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
-            response = await client.get(NAVER_SEARCH_URL, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
+            try:
+                response = await client.get(NAVER_SEARCH_URL, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+            except Exception:
+                return []
 
         items = data.get("items", [])
         places: list[Place] = []
@@ -70,9 +72,8 @@ class NaverProvider(PlaceProvider):
                 longitude=lon,
                 phone=item.get("telephone") or None,
                 url=item.get("link") or None,
-                sources=[self.name],
-                source_ids={self.name: f"{mapx}:{mapy}:{clean_title}"},
-                source_categories={self.name: raw_category} if raw_category else {},
+                source="naver",
+                source_categories=source_cats,
             )
             places.append(place)
 
