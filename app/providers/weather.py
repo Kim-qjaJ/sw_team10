@@ -47,7 +47,7 @@ class WeatherProvider:
     async def get_weather(self, latitude: float, longitude: float) -> dict | None:
         # 1. API 키 확인
         api_key = settings.public_data_service_key
-        if not api_key or not settings.kma_api_url:
+        if not api_key:
             return None
 
         nx, ny = self._dfs_xy(latitude, longitude)
