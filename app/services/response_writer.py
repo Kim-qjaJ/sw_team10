@@ -14,7 +14,52 @@ SYSTEM_PROMPT = """너는 부산 장소 추천 서비스 SW_team10의 짧은 응
 사용자의 요청과 검색 결과를 자연스러운 한국어로 요약한다. 반드시 1~2문장 안에서 답변을 끝낸다.
 순위, 주소, 전화번호, URL, 점수는 화면 카드에 따로 표시되므로 답변에서 장소 목록이나 상세정보를 반복하지 않는다.\n결과가 여러 개여도 장소명을 줄줄이 나열하지 말고, 검색 조건과 찾은 결과 개수 정도만 짧게 요약한다.
 과장하거나 특정 장소를 임의로 더 추천하지 않는다.
+날씨는 언급하지 않는다. 순위에 반영된 날씨 문장은 백엔드가 따로 덧붙인다.
 설명만 일반 텍스트로 반환한다."""
+
+# 맑은 날 날씨를 언급할 만한 요청: 야외 장소가 결과에 섞이는 종류
+OUTDOOR_CATEGORIES = {"tourism"}
+OUTDOOR_SUBCATEGORIES = {"park", "beach", "viewpoint"}
+PRECIPITATION_WORDS = {"rain": "비가", "snow": "눈이", "sleet": "비나 눈이"}
+
+
+def weather_sentence(weather: dict | None, results: list[RequestResult], location: str | None = None) -> str | None:
+    """추천 순위에 반영된 날씨를 한 문장으로 알려준다. 언급할 이유가 없으면 None.
+
+    - 날씨 정보가 없으면(키 없음·조회 실패) 말하지 않는다.
+    - 점수로 순위를 매긴 추천 결과가 있을 때만 말한다. (장소 검색은 Provider 순서 그대로라 날씨와 무관)
+    - 비·눈: 실내 장소가 위로 올라가므로 항상 말한다. 사용자 말로만 비로 처리했으면 그 말을 근거로 표현한다.
+    - 맑음: 관광지·공원처럼 야외 장소가 섞이는 요청에서만 말한다.
+    """
+    if not weather:
+        return None
+    scored = [r for r in results if r.places and r.result_type == "recommend"]
+    if not scored:
+        return None
+    if weather.get("is_raining"):
+        if weather.get("user_hint"):
+            return "비가 온다고 하셔서 실내 장소를 먼저 보여드려요."
+        word = PRECIPITATION_WORDS.get(weather.get("precipitation") or "rain", "비가")
+        where = f"{location}에 " if location else ""
+        return f"지금 {where}{word} 와서 실내 장소를 먼저 보여드려요."
+    outdoor = any(
+        r.request.category in OUTDOOR_CATEGORIES or r.request.subcategory in OUTDOOR_SUBCATEGORIES for r in scored
+    )
+    if not outdoor or weather.get("source") != "kma":
+        return None
+    temperature = weather.get("temperature")
+    if isinstance(temperature, (int, float)):
+        return f"지금 기온은 {temperature:g}°C이고 비가 오지 않아 야외 장소도 함께 골랐어요."
+    return "지금은 비가 오지 않아 야외 장소도 함께 골랐어요."
+
+
+def with_weather(summary: str | None, weather: dict | None, results: list[RequestResult],
+                 location: str | None = None) -> str | None:
+    """요약 문장 뒤에 날씨 문장을 붙인다. 요약이 없으면 그대로 둔다."""
+    sentence = weather_sentence(weather, results, location)
+    if not summary or not sentence or sentence in summary:
+        return summary
+    return f"{summary} {sentence}"
 
 
 class ResponseWriter:
@@ -125,7 +170,9 @@ class ResponseWriter:
         user_message: str,
         intent: UserIntent,
         results: list[RequestResult],
+        timeout: float | None = None,
     ) -> tuple[str | None, float]:
+        """timeout: 요청 전체 제한 시간(NFR-001, 30초) 안에서 남은 시간. 없으면 설정값을 쓴다."""
         if settings.llm_provider.strip().lower() != "groq" or not settings.groq_api_key:
             return None, 0.0
 
@@ -172,7 +219,7 @@ class ResponseWriter:
                     "temperature": 0.3,
                     "max_tokens": 500,
                 },
-                timeout=settings.groq_timeout_seconds,
+                timeout=timeout if timeout is not None else settings.groq_timeout_seconds,
             )
             response.raise_for_status()
             choices = response.json().get("choices") or []
@@ -188,8 +235,12 @@ class ResponseWriter:
     # LLM 없이 만드는 요약 (Local Router가 처리한 명확한 질의용)
     # ------------------------------------------------------------------
     @staticmethod
-    def template_summary(intent: UserIntent, results: list[RequestResult]) -> str | None:
-        """명확한 질의는 LLM 대신 규칙 기반 문장으로 결과를 요약한다."""
+    def template_summary(intent: UserIntent, results: list[RequestResult], weather: dict | None = None) -> str | None:
+        """명확한 질의는 LLM 대신 규칙 기반 문장으로 결과를 요약한다. 순위에 반영된 날씨가 있으면 덧붙인다."""
+        return with_weather(ResponseWriter._template_core(intent, results), weather, results, intent.location)
+
+    @staticmethod
+    def _template_core(intent: UserIntent, results: list[RequestResult]) -> str | None:
         found = [(result, len(result.places)) for result in results if result.places]
         if not found:
             return None

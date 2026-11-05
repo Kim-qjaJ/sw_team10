@@ -11,8 +11,9 @@ from app.schemas.api import ChatRequest, RecommendResponse
 from app.schemas.intent import PlaceRequest
 from app.services.context_service import mentions_rain
 from app.services.followup import MAX_EXPAND_M, FollowupPlan, next_radius
-from app.services.mode_router import NEARBY_RADII_M, format_radius
+from app.services.mode_router import format_radius
 from app.services.pipeline import provider_failure_notice
+from app.services.response_writer import with_weather
 
 
 async def handle_followup(
@@ -61,7 +62,7 @@ async def handle_followup(
         if has_places(response) or provider_failure_notice(response.results) or anchor is None:
             break
         bigger = next_radius(radius)
-        if bigger is None or bigger > NEARBY_RADII_M[-1] * 2:
+        if bigger is None or bigger > MAX_EXPAND_M:
             break
         radius = bigger
 
@@ -74,6 +75,10 @@ async def handle_followup(
         widened = f"범위를 {format_radius(radius)}까지 넓혀 " if radius and radius != last.radius_m and anchor else ""
         other = "다른 " if exclude else ""
         response.message = f"{widened}{other}{query} {count}곳을 찾았어요."
+        # 거리순(주변 시설)이나 검색 순서 그대로 보여주는 경우가 아니면 순위에 반영된 날씨를 알려준다.
+        if not nearby_like and last.mode != "search":
+            response.message = with_weather(response.message, (response.context or {}).get("weather"),
+                                            response.results, intent.location)
     elif not provider_failure_notice(response.results):
         response.notice = FOLLOWUP_EXHAUSTED if exclude else f"'{query}' 검색 결과가 없어요."
 

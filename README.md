@@ -18,6 +18,7 @@ AI 기반 부산 맞춤형 장소 추천 및 안내 서비스 팀 프로젝트 �
 | API | `app/services/api_router.py`, `context_service.py` | 1차 구현 |
 | 추천 알고리즘 | `app/services/place_merger.py`, `recommendation.py`, `scoring.py`, `hard_filter.py`, `exact_place_matcher.py` | 1차 구현 |
 | 구조·AI·통합 | 그 밖의 모든 파일 | 구현됨 |
+| DB | `app/db/` (`supabase_client.py`, `query_log.py`), `db/supabase_schema.sql` | 질의 로그 (선택) |
 
 **함수 이름과 입출력 형식은 바꾸지 말고 내부만 수정해 주세요.** 형식을 바꿔야 하면 먼저 구조 담당과 상의합니다.
 작업은 `feature/...` 브랜치에 올리고, main에는 통합 후 반영합니다.
@@ -106,6 +107,8 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 - 기본 LLM은 Groq입니다(`GROQ_API_KEY` 필요). 로컬 LLM을 쓰려면 `LLM_PROVIDER=ollama`로 바꾸고 Ollama를 실행해 둡니다.
 - 지역·장소 종류가 분명한 문장("서면 카페 추천해줘")은 Local Router가 처리하므로 LLM 키 없이도 동작합니다.
+- 질의 로그(선택): Supabase SQL Editor에서 `db/supabase_schema.sql`을 실행한 뒤 `.env`에 `QUERY_LOG_ENABLED=true`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`를 넣습니다. 질의 문장과 처리 경로만 저장하고(세션 ID·좌표 없음), 하루 1회 집계 후 삭제합니다. 저장 상태는 `/api/v1/status`의 `query_log`에서 확인합니다.
+- 응답 시간: 요청 전체는 `REQUEST_TIMEOUT_SECONDS`(기본 30초), LLM 해석은 `LLM_INTENT_TIMEOUT_SECONDS`(기본 20초) 안에 끝냅니다. LLM이 늦으면 사전으로 확인된 조건만으로 기본 검색을 합니다.
 - API 키 발급 방법은 `KEY_SETUP.md`를 참고합니다.
 - 실행 후 `http://127.0.0.1:8000/docs`에서 API를 테스트할 수 있습니다.
 

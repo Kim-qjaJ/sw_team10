@@ -30,6 +30,12 @@ class Settings(BaseSettings):
 
     use_mock_places: bool = True
     provider_timeout_seconds: float = 5.0
+
+    # 응답 시간 상한 (SRS NFR-001)
+    # - 요청 전체: LLM 해석·결과 요약을 포함해 이 시간 안에 결과 또는 안내를 돌려준다.
+    # - LLM 해석: 이 시간을 넘기면 LLM을 기다리지 않고, 사전으로 확인된 조건이 있으면 기본 검색을 한다.
+    request_timeout_seconds: float = 30.0
+    llm_intent_timeout_seconds: float = 20.0
     # 주변 시설 찾기: 현재 위치가 부산 밖이면 검색하지 않고 기준 장소를 묻는다.
     # 부산 밖에서 개발/시연할 때는 false로 두면 현재 위치 그대로 검색한다.
     nearby_busan_only: bool = True
@@ -46,6 +52,13 @@ class Settings(BaseSettings):
     # 실제 활용 신청한 공공데이터 API의 요청 URL.
     tour_api_url: str | None = None
     kma_api_url: str | None = None
+
+    # Supabase 질의 로그 (SRS NFR-003, DATA-09 잠정안)
+    # QUERY_LOG_ENABLED=true이고 URL·키가 모두 있을 때만 저장한다. 키는 서버 전용 secret 키를 쓴다.
+    query_log_enabled: bool = False
+    supabase_url: str | None = None
+    supabase_secret_key: str | None = None
+    supabase_timeout_seconds: float = 3.0
 
     @staticmethod
     def _decode_service_key(value: str | None) -> str | None:

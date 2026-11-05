@@ -399,6 +399,11 @@ COUNT_PATTERN = re.compile(r"(\d+|한|두|세|네|다섯|여섯|일곱|여덟|�
 _COUNT_WORDS = {"한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8, "아홉": 9, "열": 10}
 
 
+def unknown_terms(message: str) -> list[str]:
+    """사전에 없어 Local Router가 해석하지 못한 단어들. 질의 로그에 남겨 사전 보강 후보로 쓴다."""
+    return list(dict.fromkeys(_parse(message).unknown))
+
+
 def requested_count(message: str) -> int | None:
     """'관광지 3개만 추천해줘' → 3. 개수를 말하지 않으면 None."""
     match = COUNT_PATTERN.search(message)
