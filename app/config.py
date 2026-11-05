@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     tour_api_url: str | None = None
     kma_api_url: str | None = None
 
+    # 부산광역시 공공데이터 (부산 특화 데이터). 공공데이터포털에서 각각 활용 신청한다.
+    # 관광 요청: 부산명소정보, 전시 요청: 전시 목록
+    busan_attraction_url: str = "https://apis.data.go.kr/6260000/AttractionService/getAttractionKr"
+    busan_exhibit_url: str = "https://apis.data.go.kr/6260000/BusanCultureExhibitService/getBusanCultureExhibit"
+
     # Supabase 질의 로그 (SRS NFR-003, DATA-09 잠정안)
     # QUERY_LOG_ENABLED=true이고 URL·키가 모두 있을 때만 저장한다. 키는 서버 전용 secret 키를 쓴다.
     query_log_enabled: bool = False

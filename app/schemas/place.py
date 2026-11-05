@@ -28,6 +28,9 @@ class Place(BaseModel):
     busan_verified: bool = False
     region_match: Literal["inside", "unverified"] | None = None
     popularity_signal: float | None = None
+    # 이 장소에서 지금 열리는 전시 (부산 전시 목록). 전시가 아닌 장소는 빈 목록.
+    # 항목: {"title", "start", "end", "open_run", "free"}
+    events: list[dict] = Field(default_factory=list)
 
     walking_minutes: float | None = None
     transit_minutes: float | None = None

@@ -303,6 +303,19 @@ function makeCard(p, key, number, resultType) {
   card.append(top, el("h3", p.name));
   card.append(el("p", p.address || "주소 정보 없음"));
   if (p.phone) card.append(el("p", `전화 ${p.phone}`));
+  // 부산 전시 목록: 이 장소에서 지금 열리는 전시
+  if (Array.isArray(p.events) && p.events.length) {
+    const events = el("ul", null, "events");
+    for (const e of p.events) {
+      if (!e || typeof e.title !== "string") continue;
+      const period = e.open_run
+        ? "상시"
+        : [e.start, e.end].filter((d) => typeof d === "string").join(" ~ ");
+      const extra = [period, e.free ? "무료" : null].filter(Boolean).join(", ");
+      events.append(el("li", extra ? `전시 ${e.title} (${extra})` : `전시 ${e.title}`));
+    }
+    if (events.childElementCount) card.append(events);
+  }
   const metrics = [];
   if (finite(p.distance_m) && p.distance_m >= 0)
     metrics.push(

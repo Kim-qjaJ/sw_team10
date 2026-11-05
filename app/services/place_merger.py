@@ -18,7 +18,7 @@ SAME_PLACE_M = 200
 # 출처 정보는 따로 합치고, 점수 필드는 병합 뒤 추천 단계에서 채운다.
 _SKIP_FILL = {
     "id", "name", "latitude", "longitude", "sources", "source_ids", "source_categories", "source_category_codes",
-    "popularity_signal", "busan_verified", "score", "rank_score", "data_confidence", "score_breakdown",
+    "popularity_signal", "busan_verified", "events", "score", "rank_score", "data_confidence", "score_breakdown",
 }
 
 
@@ -89,3 +89,6 @@ class PlaceMerger:
         if other.popularity_signal is not None:
             base.popularity_signal = max(base.popularity_signal or 0.0, other.popularity_signal)
         base.busan_verified = base.busan_verified or other.busan_verified
+        # 카카오의 같은 미술관과 합쳐져도 부산 전시 목록의 전시 정보는 남긴다.
+        if other.events and not base.events:
+            base.events = list(other.events)

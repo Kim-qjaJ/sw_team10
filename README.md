@@ -108,6 +108,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 - 기본 LLM은 Groq입니다(`GROQ_API_KEY` 필요). 로컬 LLM을 쓰려면 `LLM_PROVIDER=ollama`로 바꾸고 Ollama를 실행해 둡니다.
 - 지역·장소 종류가 분명한 문장("서면 카페 추천해줘")은 Local Router가 처리하므로 LLM 키 없이도 동작합니다.
 - 질의 로그(선택): Supabase SQL Editor에서 `db/supabase_schema.sql`을 실행한 뒤 `.env`에 `QUERY_LOG_ENABLED=true`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`를 넣습니다. 질의 문장과 처리 경로만 저장하고(세션 ID·좌표 없음), 하루 1회 집계 후 삭제합니다. 저장 상태는 `/api/v1/status`의 `query_log`에서 확인합니다.
+- 부산 데이터: 관광 요청은 부산명소정보(`AttractionService`), 전시 요청은 부산 전시 목록(`BusanCultureExhibitService`)을 씁니다. 공공데이터포털에서 두 API를 각각 활용 신청하고, 전시장 좌표는 카카오로 찾으므로 `KAKAO_REST_API_KEY`도 필요합니다. 진행 중인 전시만 결과 카드에 함께 표시합니다.
 - 응답 시간: 요청 전체는 `REQUEST_TIMEOUT_SECONDS`(기본 30초), LLM 해석은 `LLM_INTENT_TIMEOUT_SECONDS`(기본 20초) 안에 끝냅니다. LLM이 늦으면 사전으로 확인된 조건만으로 기본 검색을 합니다.
 - API 키 발급 방법은 `KEY_SETUP.md`를 참고합니다.
 - 실행 후 `http://127.0.0.1:8000/docs`에서 API를 테스트할 수 있습니다.
