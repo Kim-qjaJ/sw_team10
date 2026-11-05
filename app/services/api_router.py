@@ -1,4 +1,6 @@
 import asyncio
+
+import httpx
 from app.config import settings
 from app.providers.base import ProviderNotConfigured
 from app.providers.busan import BusanProvider
@@ -60,8 +62,14 @@ class APIRouterService:
                 return provider.name, res, None
             except ProviderNotConfigured as e:
                 return provider.name, [], ProviderStatus(status="not_configured", detail=str(e))
+            except httpx.TimeoutException:
+                return provider.name, [], ProviderStatus(status="timeout", detail="응답 시간 초과")
+            except httpx.HTTPStatusError as e:
+                code = e.response.status_code
+                state = "rate_limited" if code == 429 else "error"
+                return provider.name, [], ProviderStatus(status=state, detail=f"HTTP {code}")
             except Exception as e:
-                return provider.name, [], ProviderStatus(status="error", detail=str(e))
+                return provider.name, [], ProviderStatus(status="error", detail=f"{type(e).__name__}: {e}")
 
         # 모든 active_providers를 동시에 비동기(asyncio.gather)로 호출
         results = await asyncio.gather(
