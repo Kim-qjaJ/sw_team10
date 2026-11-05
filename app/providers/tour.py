@@ -4,6 +4,11 @@ from app.providers.base import PlaceProvider, ProviderNotConfigured
 from app.schemas.intent import PlaceRequest
 from app.schemas.place import Place
 
+# TourAPI 콘텐츠 타입 ID → 이름
+CONTENT_TYPES = {
+    "12": "관광지", "14": "문화시설", "15": "축제공연행사", "25": "여행코스",
+    "28": "레포츠", "32": "숙박", "38": "쇼핑", "39": "음식점",
+}
 
 class TourProvider(PlaceProvider):
     name = "tour"
@@ -24,10 +29,8 @@ class TourProvider(PlaceProvider):
             raise ProviderNotConfigured("TOUR_API_URL이 설정되지 않았습니다.")
         tour_search_url = f"{settings.tour_api_url.rstrip('/')}/searchKeyword2"
 
-        # 2. 검색 키워드 조합
+        # 2. 검색 키워드: TourAPI는 '부산 해수욕장'처럼 지역명을 붙이면 결과가 0건이라 검색어만 쓰는걸로 수정.
         query_text = request.query
-        if location and location not in query_text:
-            query_text = f"{location} {query_text}"
 
         params = {
             "serviceKey": api_key,
@@ -37,7 +40,8 @@ class TourProvider(PlaceProvider):
             "MobileApp": "sw_team10",
             "_type": "json",
             "keyword": query_text,
-            "areaCode": "6",  # 부산 지역코드
+            # KorService2는 법정동 시도 코드를 사용 (부산 26). 예전 areaCode=6은 1건만 나와 수정.
+            "lDongRegnCd": "26",
         }
 
         # 3. 비동기 HTTP 요청
@@ -79,8 +83,11 @@ class TourProvider(PlaceProvider):
                 longitude=lon,
                 phone=item.get("tel") or None,
                 url=item.get("firstimage") or None,
-                source="tour",
-                source_categories=["관광지"],
+                sources=[self.name],
+                source_ids={self.name: str(item.get("contentid") or "")},
+                # Place 스키마는 {provider: 원본 업종} 형식. 콘텐츠 타입을 업종으로 사용.
+                source_categories={self.name: CONTENT_TYPES.get(str(item.get("contenttypeid")), "관광정보")},
+                source_category_codes={self.name: str(item.get("contenttypeid"))} if item.get("contenttypeid") else {},
             )
             places.append(place)
 
