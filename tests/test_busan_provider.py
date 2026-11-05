@@ -8,7 +8,7 @@ from datetime import date
 from unittest.mock import patch
 
 from app.providers import busan
-from app.providers.busan import BusanProvider, is_ongoing, parse_date
+from app.providers.busan import BusanProvider, is_ongoing, name_matches, parse_date
 from app.schemas.intent import PlaceRequest
 from app.schemas.place import Place
 from app.services.place_merger import PlaceMerger
@@ -35,6 +35,10 @@ EXHIBITS = {"getBusanCultureExhibit": {"body": {"totalCount": 5, "items": {"item
      "place_nm": "부산박물관", "pay_at": "N"},
     {"res_no": "5", "title": "서울 전시", "op_st_dt": "2026-11-01", "op_ed_dt": "2026-11-30", "op_at": "N",
      "place_nm": "부산 밖 갤러리", "pay_at": "N"},
+    {"res_no": "6", "title": "이름 다른 장소 전시", "op_st_dt": "2026-11-01", "op_ed_dt": "2026-11-30", "op_at": "N",
+     "place_nm": "부산현대미술관", "pay_at": "N"},
+    {"res_no": "7", "title": "끝난 상설 전시", "op_st_dt": "2020-01-01", "op_ed_dt": "2026-10-31", "op_at": "Y",
+     "place_nm": "부산박물관", "pay_at": "N"},
 ]}}}}
 
 KAKAO = {
@@ -44,6 +48,9 @@ KAKAO = {
                                   "road_address_name": "부산 남구 유엔평화로 63"}]},
     "부산 부산 밖 갤러리": {"documents": [{"place_name": "갤러리", "y": "37.5", "x": "127.0",
                                      "road_address_name": "서울 종로구"}]},
+    # 첫 결과가 이름이 다른 장소면 쓰지 않는다.
+    "부산 부산현대미술관": {"documents": [{"place_name": "부산시민공원", "y": "35.168", "x": "129.057",
+                                    "road_address_name": "부산 부산진구 시민공원로 73"}]},
 }
 
 
@@ -122,18 +129,32 @@ class BusanProviderTest(unittest.IsolatedAsyncioTestCase):
         await provider.search(PlaceRequest(query="명소", category="tourism"))
         self.assertEqual(FakeClient.calls.count("attraction"), 1)
 
-    async def test_restaurant_and_cafe_requests_do_not_call_busan_api(self):
-        for request in (PlaceRequest(query="카페", category="cafe"), PlaceRequest(query="공연장", category="culture")):
+    async def test_attractions_filtered_by_radius(self):
+        provider = BusanProvider()
+        request = PlaceRequest(query="관광지", category="tourism")
+        near = await provider.search(request, anchor=ANCHOR, radius_m=1500)
+        self.assertEqual([p.name for p in near], ["흰여울문화마을"])
+        wider = await provider.search(request, anchor=ANCHOR, radius_m=5000)
+        self.assertEqual([p.name for p in wider], ["흰여울문화마을", "용두산공원"])
+        self.assertTrue(BusanProvider.supports_radius)
+
+    async def test_restaurant_cafe_and_venue_requests_do_not_call_busan_api(self):
+        # 미술관·박물관·갤러리 같은 장소 찾기는 카카오·네이버가 맡는다.
+        for request in (PlaceRequest(query="카페", category="cafe"), PlaceRequest(query="공연장", category="culture"),
+                        PlaceRequest(query="미술관", category="culture", subcategory="gallery"),
+                        PlaceRequest(query="박물관", category="culture", subcategory="museum")):
             self.assertEqual(await BusanProvider().search(request), [])
         self.assertEqual(FakeClient.calls, [])
 
     async def test_exhibits_only_ongoing_grouped_by_venue(self):
         places = await BusanProvider().search(PlaceRequest(query="전시", category="culture", subcategory="exhibition"))
         by_name = {p.name: p for p in places}
-        # 부산 밖으로 좌표가 잡힌 전시장은 빠진다.
+        # 부산 밖으로 좌표가 잡히거나 카카오 이름이 다른 전시장은 빠진다.
         self.assertEqual(set(by_name), {"부산시립미술관", "부산박물관"})
         museum = by_name["부산시립미술관"]
         self.assertEqual([e["title"] for e in museum.events], ["바다 사진전", "현대미술 소장품전"])  # 지난 전시 제외, 종료일 순
+        # 종료일이 지난 상설 전시는 빠진다.
+        self.assertEqual([e["title"] for e in by_name["부산박물관"].events], ["상설 전시"])
         self.assertEqual(museum.events[0], {"title": "바다 사진전", "start": "2026-11-01", "end": "2026-11-30",
                                             "open_run": False, "free": True})
         self.assertTrue(museum.indoor)
@@ -153,11 +174,11 @@ class BusanProviderTest(unittest.IsolatedAsyncioTestCase):
         await provider.search(request)
         await provider.search(request)
         kakao_calls = [c for c in FakeClient.calls if c.startswith("kakao:")]
-        self.assertEqual(len(kakao_calls), 3)  # 전시장 3곳을 한 번씩만 조회
+        self.assertEqual(len(kakao_calls), 4)  # 전시장 4곳을 한 번씩만 조회
 
     async def test_without_kakao_key_exhibits_are_skipped(self):
         with patch.object(busan.settings, "kakao_rest_api_key", None):
-            places = await BusanProvider().search(PlaceRequest(query="미술관", category="culture", subcategory="gallery"))
+            places = await BusanProvider().search(PlaceRequest(query="전시", category="culture", subcategory="exhibition"))
         self.assertEqual(places, [])
 
 
@@ -174,6 +195,15 @@ class HelperTest(unittest.TestCase):
         self.assertFalse(is_ongoing({"op_st_dt": "2026-11-06", "op_ed_dt": "2026-11-30"}, today))
         self.assertTrue(is_ongoing({"op_st_dt": "2020-01-01", "op_ed_dt": "", "op_at": "Y"}, today))
         self.assertFalse(is_ongoing({"op_st_dt": "", "op_ed_dt": ""}, today))
+        # 상시 전시라도 종료일이 지났으면 제외, 시작 전이면 제외
+        self.assertFalse(is_ongoing({"op_st_dt": "2020-01-01", "op_ed_dt": "2026-11-04", "op_at": "Y"}, today))
+        self.assertFalse(is_ongoing({"op_st_dt": "2026-12-01", "op_ed_dt": "", "op_at": "Y"}, today))
+        self.assertTrue(is_ongoing({"op_st_dt": "2020-01-01", "op_ed_dt": "2026-11-05", "op_at": "Y"}, today))
+
+    def test_name_matches(self):
+        self.assertTrue(name_matches("부산시립미술관", "부산시립미술관"))
+        self.assertTrue(name_matches("부산시립미술관", "부산시립미술관 별관"))
+        self.assertFalse(name_matches("부산현대미술관", "부산시민공원"))
 
     def test_merger_keeps_events_from_busan(self):
         kakao = Place(name="부산시립미술관", latitude=35.1667, longitude=129.1370, sources=["kakao"],

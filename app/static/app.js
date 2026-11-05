@@ -305,15 +305,19 @@ function makeCard(p, key, number, resultType) {
   if (p.phone) card.append(el("p", `전화 ${p.phone}`));
   // 부산 전시 목록: 이 장소에서 지금 열리는 전시
   if (Array.isArray(p.events) && p.events.length) {
+    const SHOWN_EVENTS = 5;
+    const valid = p.events.filter((e) => e && typeof e.title === "string");
     const events = el("ul", null, "events");
-    for (const e of p.events) {
-      if (!e || typeof e.title !== "string") continue;
-      const period = e.open_run
-        ? "상시"
-        : [e.start, e.end].filter((d) => typeof d === "string").join(" ~ ");
+    for (const e of valid.slice(0, SHOWN_EVENTS)) {
+      const period =
+        e.open_run && typeof e.end !== "string"
+          ? "상시"
+          : [e.start, e.end].filter((d) => typeof d === "string").join(" ~ ");
       const extra = [period, e.free ? "무료" : null].filter(Boolean).join(", ");
       events.append(el("li", extra ? `전시 ${e.title} (${extra})` : `전시 ${e.title}`));
     }
+    if (valid.length > SHOWN_EVENTS)
+      events.append(el("li", `외 전시 ${valid.length - SHOWN_EVENTS}개`));
     if (events.childElementCount) card.append(events);
   }
   const metrics = [];

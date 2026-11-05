@@ -2,7 +2,8 @@
 
 요청 종류에 따라 하나만 부른다.
 - 관광 요청(tourism)           : 부산명소정보 서비스 (AttractionService/getAttractionKr)
-- 전시 요청(culture 중 전시·미술관·갤러리·박물관): 전시 목록 서비스 (BusanCultureExhibitService)
+- 전시 요청(전시·전시회)     : 전시 목록 서비스 (BusanCultureExhibitService)
+  · 미술관·갤러리·박물관 같은 장소 찾기는 카카오·네이버가 맡고, 같은 장소면 병합 단계에서 전시 정보가 붙는다.
   · 지금 진행 중인 전시만 쓰고, 같은 전시장의 전시는 장소 하나의 events로 묶는다.
   · 전시 목록에는 좌표가 없어 전시장 이름을 카카오 키워드 검색으로 찾아 좌표를 붙인다.
 - 그 밖의 요청(음식점·카페 등) : 부르지 않는다 (카카오·네이버가 맡는다)
@@ -37,11 +38,11 @@ VENUE_TTL_SECONDS = 24 * 3600
 PAGE_SIZE = 1000
 MAX_PAGES = 3
 MAX_RESULTS = 50
-MAX_EVENTS_PER_PLACE = 5
+# 장소 하나에 저장하는 전시 수 (화면에는 앞의 몇 개만 보여주고 나머지는 '외 N개'로 표시)
+MAX_EVENTS_PER_PLACE = 20
 GEOCODE_CONCURRENCY = 5
 
-EXHIBIT_SUBCATEGORIES = {"exhibition", "gallery", "museum"}
-EXHIBIT_WORDS = ("전시", "미술관", "갤러리", "박물관")
+EXHIBIT_WORDS = ("전시",)
 # 이 검색어면 이름 필터 없이 전체를 후보로 쓴다.
 GENERIC_ATTRACTION_QUERIES = {"관광지", "관광명소", "명소", "볼거리", "여행지", "가볼만한곳", "가볼곳", "놀거리", "관광"}
 GENERIC_EXHIBIT_QUERIES = {"전시", "전시회", "전시장", "미술관", "갤러리", "박물관", "무료전시", "무료", "전시추천"}
@@ -150,13 +151,19 @@ def parse_date(value) -> date | None:
 
 
 def is_ongoing(item: dict, today: date) -> bool:
-    """오늘 관람할 수 있는 전시인지. 상시 전시(op_at=Y)는 종료일이 없어도 포함한다."""
+    """오늘 관람할 수 있는 전시인지.
+
+    - 시작일이 오늘 이후면 제외한다.
+    - 종료일이 있으면 상시 전시(op_at=Y)라도 종료일이 지났을 때 제외한다.
+    - 종료일이 없으면 상시 전시만 포함한다.
+    """
     start, end = parse_date(item.get("op_st_dt")), parse_date(item.get("op_ed_dt"))
-    if str(item.get("op_at") or "").upper() == "Y" and (start is None or start <= today):
-        return True
-    if start is None or end is None:
+    open_run = str(item.get("op_at") or "").upper() == "Y"
+    if start is not None and start > today:
         return False
-    return start <= today <= end
+    if end is not None:
+        return end >= today and (start is not None or open_run)
+    return open_run
 
 
 def today_kst() -> date:
@@ -164,14 +171,32 @@ def today_kst() -> date:
 
 
 def wants_exhibit(request: PlaceRequest) -> bool:
+    """전시 자체를 찾는 요청만. '미술관 추천', '박물관 추천'은 장소 찾기라 카카오·네이버가 맡는다."""
     if request.category != "culture":
         return False
-    return request.subcategory in EXHIBIT_SUBCATEGORIES or any(word in request.query for word in EXHIBIT_WORDS)
+    return request.subcategory == "exhibition" or any(word in request.query for word in EXHIBIT_WORDS)
+
+
+def name_matches(venue: str, place_name: str) -> bool:
+    """전시장 이름과 카카오 장소 이름이 같은 곳인지. 공백·괄호를 무시하고 한쪽이 다른 쪽을 포함하면 같다고 본다."""
+    a = re.sub(r"[\s()\[\]·]", "", venue.lower())
+    b = re.sub(r"[\s()\[\]·]", "", place_name.lower())
+    if not a or not b:
+        return False
+    return a == b or (len(min(a, b, key=len)) >= 3 and (a in b or b in a))
+
+
+def within_radius(places: list[Place], radius_m: int | None) -> list[Place]:
+    """반경 검색이면 기준점에서 radius_m 안의 장소만 남긴다."""
+    if not radius_m:
+        return places
+    return [p for p in places if p.distance_m is not None and p.distance_m <= radius_m]
 
 
 class BusanProvider(PlaceProvider):
     name = "busan"
-    supports_radius = False
+    # 두 데이터 모두 좌표가 있으므로(전시장은 카카오로 찾음) 주변 시설 찾기·범위 넓히기에도 쓴다.
+    supports_radius = True
 
     async def search(
         self,
@@ -184,9 +209,12 @@ class BusanProvider(PlaceProvider):
         if not api_key:
             raise ProviderNotConfigured("공공데이터포털 API 키가 설정되지 않았습니다.")
         if request.category == "tourism":
-            return await self._attractions(request, anchor, api_key)
-        if wants_exhibit(request):
-            return await self._exhibits(request, anchor, api_key)
+            places = await self._attractions(request, anchor, api_key)
+        elif wants_exhibit(request):
+            places = await self._exhibits(request, anchor, api_key)
+        else:
+            return []
+        return within_radius(places, radius_m if anchor else None)
         return []
 
     # ------------------------------------------------------------------
@@ -341,15 +369,22 @@ class BusanProvider(PlaceProvider):
             async with semaphore:
                 try:
                     response = await client.get(KAKAO_KEYWORD_URL, headers=headers,
-                                                params={"query": f"부산 {venue}", "size": 1})
+                                                params={"query": f"부산 {venue}", "size": 5})
                     response.raise_for_status()
                     documents = response.json().get("documents") or []
                 except (httpx.HTTPError, ValueError):
                     return venue, None, False
-            doc = documents[0] if documents else None
-            address = (doc or {}).get("road_address_name") or (doc or {}).get("address_name") or ""
-            if not doc or "부산" not in address:
-                return venue, (), True   # 부산에서 못 찾음 (빈 값도 캐시)
+            # 첫 결과를 그대로 쓰지 않고, 부산 주소이면서 이름이 맞는 장소만 쓴다. (정확히 같은 이름 우선)
+            candidates = []
+            for doc in documents:
+                address = doc.get("road_address_name") or doc.get("address_name") or ""
+                name = doc.get("place_name") or ""
+                if "부산" in address and name_matches(venue, name) and doc.get("x") and doc.get("y"):
+                    exact = re.sub(r"\s", "", name) == re.sub(r"\s", "", venue)
+                    candidates.append((not exact, doc, address))
+            if not candidates:
+                return venue, (), True   # 맞는 장소 없음 (빈 값도 캐시해 다시 조회하지 않는다)
+            _, doc, address = min(candidates, key=lambda c: c[0])
             return venue, (float(doc["y"]), float(doc["x"]), address, doc.get("phone") or None,
                            doc.get("place_url") or None), True
 
