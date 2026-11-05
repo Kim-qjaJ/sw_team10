@@ -42,13 +42,9 @@ class KakaoProvider(PlaceProvider):
 
         # 3. 비동기 HTTP 요청
         async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
-            try:
-                response = await client.get(KAKAO_SEARCH_URL, headers=headers, params=params)
-                response.raise_for_status()
-                data = response.json()
-            except Exception as e:
-                # HTTP 오류나 네트워크 문제 발생 시 빈 리스트 반환
-                return []
+            response = await client.get(KAKAO_SEARCH_URL, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
 
         # 4. 카카오 응답을 공통 Place 객체 리스트로 변환
         documents = data.get("documents", [])
@@ -70,9 +66,11 @@ class KakaoProvider(PlaceProvider):
                 longitude=float(doc["x"]) if doc.get("x") else None,
                 phone=doc.get("phone") or None,
                 url=doc.get("place_url") or None,
-                source="kakao",
-                source_categories=source_cats,
-                source_category_codes=source_codes,
+                sources=[self.name],
+                source_ids={self.name: str(doc.get("id") or "")},
+                # Place 스키마는 {provider: 원본 업종 경로} 형식이다.
+                source_categories={self.name: category_name} if category_name else {},
+                source_category_codes={self.name: category_group_code} if category_group_code else {},
             )
             places.append(place)
 
