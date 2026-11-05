@@ -72,8 +72,39 @@ class MergeTest(unittest.TestCase):
         result = self.merger.merge([kakao("A"), naver("A카페")])
         self.assertEqual(len(result), 2)
 
+    def test_digits_read_as_korean(self):
+        # 실제 데이터에서 놓쳤던 경우: Naver '송정3대국밥', Kakao '송정삼대국밥' (4m)
+        result = self.merger.merge([kakao("송정삼대국밥"), naver("송정3대국밥", 4 / M_PER_DEG)])
+        self.assertEqual(len(result), 1)
+
+    def test_similar_name_nearby_merged(self):
+        # 한 글자 차이(오타 수준), 20m 이내
+        result = self.merger.merge([kakao("서면놀이터카페"), naver("서면놀이터까페", 20 / M_PER_DEG)])
+        self.assertEqual(len(result), 1)
+
+    def test_similar_name_far_not_merged(self):
+        result = self.merger.merge([kakao("서면놀이터카페"), naver("서면놀이터까페", 120 / M_PER_DEG)])
+        self.assertEqual(len(result), 2)
+
+    def test_different_shops_same_building_not_merged(self):
+        # 실제 데이터: 23m 떨어진 다른 가게
+        result = self.merger.merge([kakao("신촌양푼이"), naver("철판은 핑계고", 23 / M_PER_DEG)])
+        self.assertEqual(len(result), 2)
+
     def test_empty(self):
         self.assertEqual(self.merger.merge([]), [])
+
+    def test_provider_rank_becomes_signal(self):
+        """Kakao·Naver가 준 순서를 검색 순위 신호로 남긴다. 합쳐지면 높은 값, 원본은 그대로."""
+        k1, k2 = kakao("A카페"), kakao("B카페", 0.01)
+        n1 = naver("B카페", 0.01)
+        tour = Place(name="C관광지", sources=["tour"])
+        result = {p.name: p for p in self.merger.merge([k1, k2, n1, tour])}
+        self.assertEqual(result["A카페"].popularity_signal, 1.0)
+        self.assertEqual(result["B카페"].popularity_signal, 1.0)  # Kakao 2위지만 Naver 1위
+        self.assertIsNone(result["C관광지"].popularity_signal)  # 순서가 관련도순이 아닌 Provider
+        self.assertIsNone(k1.popularity_signal)
+        self.assertLess(self.merger.merge([k1, k2])[1].popularity_signal, 1.0)
 
 
 if __name__ == "__main__":

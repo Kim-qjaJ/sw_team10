@@ -26,27 +26,53 @@ WEIGHTS = {
     "cross": 10,       # Kakao / Naver 교차정보
     "busan": 10,       # 부산 특화 데이터
 }
+# 비·눈이 오면 날씨 배점을 올린다. 10점으로는 기준점 바로 앞 해수욕장이 아쿠아리움보다 위에 남았다 (2026-11 실제 데이터).
+# 점수는 사용한 배점 합으로 100점 환산하므로 합계가 100을 넘어도 된다.
+RAIN_WEATHER_WEIGHT = 25
 
-# 요청 category → 원본 업종 경로에 나타나는 단어
+
+def weights_for(weather: dict | None) -> dict[str, int]:
+    """현재 날씨에 맞는 항목별 배점."""
+    if weather and weather.get("is_raining"):
+        return {**WEIGHTS, "weather": RAIN_WEATHER_WEIGHT}
+    return dict(WEIGHTS)
+
+# 요청 category → 원본 업종 경로에 나타나는 단어 (Kakao·Naver 실제 업종 경로 기준)
 CATEGORY_WORDS = {
-    "restaurant": ("음식점", "식당", "한식", "중식", "일식", "양식", "분식", "국밥", "고기", "술집", "주점"),
+    "restaurant": ("음식점", "식당", "한식", "중식", "일식", "양식", "분식", "국밥", "고기", "술집", "주점", "뷔페"),
     "cafe": ("카페", "커피", "디저트", "베이커리", "찻집"),
-    "tourism": ("관광", "명소", "해수욕장", "공원", "전망", "여행"),
+    "tourism": ("관광", "명소", "해수욕장", "공원", "전망", "여행", "시장", "사찰"),
     "culture": ("문화", "전시", "미술관", "박물관", "도서관", "공연", "영화"),
-    "activity": ("체험", "스포츠", "레저", "놀이", "방탈출", "볼링"),
-    "public_facility": ("공공기관", "행정", "구청", "주민센터", "지하철역", "기차역", "병원", "약국", "우체국"),
+    # Kakao는 방탈출 카페 상당수를 '음식점 > 카페 > 테마카페'로 분류해서 테마카페는 카페이자 체험으로 본다.
+    "activity": ("체험", "스포츠", "레저", "놀이", "방탈출", "볼링", "노래방", "오락", "여가시설", "찜질방", "수상", "요트",
+                 "테마카페", "레포츠"),
+    "public_facility": ("공공기관", "행정", "구청", "주민센터", "지하철", "기차역", "터미널", "병원", "약국", "우체국"),
     "education": ("학교", "대학", "학원", "교육"),
 }
 
+# 관광·문화·체험은 실제 업종 분류의 경계가 흐리다 (같은 아쿠아리움이 Kakao는 문화시설, Naver는 관람,체험).
+# 서로 다른 종류로 보지 않고 '비슷한 종류'로 본다.
+RELATED_CATEGORIES = {"tourism", "culture", "activity"}
+
+# 목적지가 아닌 부대시설 (주차장, 정문, ATM 등). 공공시설 요청이 아니면 후보에서 뺀다.
+# '도로시설' 전체가 아니라 '교차로'만 본다 (광안대교 같은 다리가 도로시설로 분류될 수 있다).
+AMENITY_WORDS = ("주차장", "입출구", "ATM", "편의점", "충전소", "안경", "자동차", "숙박", "관리,운영", "화장실", "교차로")
+
+# 기간 행사 (축제, 이벤트). 상시 장소가 아니라서 검색어가 행사를 찾을 때만 정상 점수를 준다.
+# 후보에서 빼지는 않는다 (행사 장소를 찾는 사람도 있다).
+EVENT_WORDS = ("축제", "페스티벌", "이벤트", "행사")
+
 # 동행별로 어울리는 / 피하는 업종 단어 (Kakao·Naver 업종 경로 기준)
 COMPANION_WORDS = {
-    "alone": ("도서관", "미술관", "갤러리", "서점", "책방", "전시", "카페", "혼밥", "1인"),
-    "friend": ("술집", "주점", "호프", "포차", "이자카야", "방탈출", "볼링", "노래방", "보드게임", "당구", "오락"),
-    "family": ("키즈", "어린이", "가족", "놀이", "체험", "공원", "박물관", "과학관", "아쿠아리움", "수족관",
-               "동물원", "테마파크", "해수욕장"),
+    "alone": ("도서관", "미술관", "갤러리", "서점", "책방", "전시", "카페", "영화관", "코인노래", "혼밥", "1인"),
+    "friend": ("술집", "주점", "호프", "포차", "이자카야", "칵테일", "방탈출", "볼링", "노래방", "보드게임", "당구",
+               "오락", "요트", "워터파크", "테마파크"),
+    "family": ("키즈", "어린이", "유아", "가족", "패밀리", "뷔페", "놀이", "체험", "공원", "박물관", "과학관",
+               "아쿠아리움", "수족관", "동물", "테마파크", "해수욕장", "수목원"),
 }
 COMPANION_AVOID = {
-    "family": ("술집", "주점", "호프", "포차", "이자카야", "클럽", "바"),
+    "alone": ("키즈", "유아", "어린이", "패밀리"),
+    "family": ("술집", "주점", "호프", "포차", "이자카야", "칵테일", "클럽", "바"),
 }
 # 업종 정보가 없을 때 쓰는 종류 단위 적합도 (후보 간 차이는 없다)
 COMPANION_FIT = {
@@ -56,13 +82,24 @@ COMPANION_FIT = {
 }
 COMPANION_LABEL = {"alone": "혼자", "friend": "친구와", "family": "가족과"}
 
-# 업종으로 실내/야외를 추정하는 단어. 1글자 단어(산)는 업종 단계가 정확히 같을 때만 인정한다.
-OUTDOOR_WORDS = ("해수욕장", "해변", "공원", "산", "등산", "둘레길", "산책로", "캠핑", "수목원", "해안", "계곡", "유원지")
-INDOOR_WORDS = ("카페", "음식점", "식당", "미술관", "박물관", "도서관", "영화관", "백화점", "쇼핑몰", "아쿠아리움",
-                "방탈출", "볼링", "노래방", "서점", "전시관", "과학관", "학원", "PC방")
+# 업종으로 실내/야외를 추정하는 단어. 1글자 단어(산, 섬, 숲)는 업종 단계가 정확히 같을 때만 인정한다.
+# 실내·야외 단서가 함께 있으면(예: '테마거리 > 카페거리') 판단하지 않는다.
+OUTDOOR_WORDS = ("해수욕장", "해변", "공원", "산", "섬", "숲", "등산", "둘레길", "산책로", "도보여행", "갈맷길", "해파랑길",
+                 "캠핑", "수목원", "자연휴양림", "해안", "계곡", "저수지", "유원지", "광장", "거리", "골목", "축제",
+                 "요트", "수상")
+INDOOR_WORDS = ("카페", "음식점", "식당", "한식", "중식", "일식", "양식", "분식", "뷔페", "술집", "주점", "이자카야",
+                "미술관", "박물관", "도서관", "영화관", "공연장", "극장", "회관", "백화점", "쇼핑몰", "아쿠아리움",
+                "방탈출", "볼링", "노래방", "찜질방", "실내", "서점", "전시관", "과학관", "학원", "PC방")
 
 # 이동수단별 접근성 거리 감쇠 배율 (자동차는 먼 거리도 덜 불리하다)
 MODE_SCALE = {"walk": 1.0, "transit": 1.5, "car": 3.0}
+# 이 거리 안은 모두 '바로 근처'로 보고 접근성을 같게 준다 (걸어서 5분 안팎).
+# 200m와 400m 차이로 카카오·네이버 상위 장소가 밀려나지 않게 한다 (2026-11 검색 대비 비교).
+NEAR_M = 400
+
+# '맛집'처럼 식사 장소를 찾는 검색어. 이 검색에서 술집은 음식점이어도 종류 점수를 낮춘다.
+MEAL_QUERIES = ("맛집", "밥집", "식당")
+BAR_WORDS = ("술집", "주점", "호프", "포차", "이자카야", "칵테일", "와인바")
 
 
 def _decay(value: float, scale: float) -> float:
@@ -70,17 +107,75 @@ def _decay(value: float, scale: float) -> float:
     return 1.0 / (1.0 + (value / max(scale, 1.0)) * 3.0)
 
 
+def _deepest_category(path: str) -> tuple[str, set[str]]:
+    """업종 경로에서 종류 단어가 들어 있는 가장 세부 단계와 그 단계가 가리키는 종류.
+
+    예: '음식점 > 카페 > 커피전문점' → ('커피전문점', {'cafe'})  (상위 '음식점'보다 세부 단계를 따른다)
+    """
+    for segment in reversed([s.strip() for s in path.split(">") if s.strip()]):
+        kinds = {kind for kind, words in CATEGORY_WORDS.items() if any(w in segment for w in words)}
+        if kinds:
+            return segment, kinds
+    return "", set()
+
+
+def infer_categories(source_categories: dict[str, str]) -> set[str]:
+    """Provider 원본 업종으로 장소의 실제 종류를 추정한다. 단서가 없으면 빈 집합."""
+    kinds: set[str] = set()
+    for path in source_categories.values():
+        kinds |= _deepest_category(path)[1]
+    return kinds
+
+
+def related_categories(category: str | None) -> set[str]:
+    """요청 종류와 '비슷한 종류'로 볼 종류들 (자기 자신 제외)."""
+    return RELATED_CATEGORIES - {category} if category in RELATED_CATEGORIES else set()
+
+
+def is_amenity(source_categories: dict[str, str]) -> bool:
+    """주차장·정문·ATM 같은 부대시설인지 (원본 업종 기준)."""
+    return any(word in path for path in source_categories.values() for word in AMENITY_WORDS)
+
+
 def category_score(category: str | None, subcategory: str | None, query: str,
                    source_categories: dict[str, str], place_category: str | None) -> tuple[float, str] | None:
-    """요청 종류·검색어와 장소 업종이 맞는지."""
-    path = " ".join(source_categories.values()) + " " + (place_category or "")
-    if not path.strip():
+    """요청 종류·검색어와 장소 업종이 맞는지.
+
+    Provider는 Place.category에 요청 종류를 그대로 넣는 경우가 있어서, 원본 업종(source_categories)이
+    있으면 그것만으로 판단하고 place_category는 원본 업종이 없을 때만 쓴다.
+    """
+    # '식당'·'맛집' 같은 일반 검색어는 업종 글자 일치로 가산하지 않는다.
+    # 카카오 업종 경로 끝에 가게 이름이 붙어서('음식점 > 일식 > 후라토식당') 이름에 '식당'이 든 가게만 올라갔다.
+    generic = query.strip() in MEAL_QUERIES
+    if source_categories:
+        path = " > ".join(source_categories.values())
+        actual = infer_categories(source_categories)
+        segment = next((s for s in (_deepest_category(p)[0] for p in source_categories.values()) if s), "")
+        if category and category != "public_facility" and is_amenity(source_categories):
+            return 0.1, "목적지가 아닌 부대시설"
+        if any(w in path for w in EVENT_WORDS) and not any(w in f"{query} {subcategory or ''}" for w in EVENT_WORDS):
+            return 0.2, "기간 행사 (상시 장소 아님)"
+        if category and actual and category not in actual and not actual & related_categories(category):
+            return 0.1, f"요청과 다른 업종 ({segment})"
+        if generic and _has_word(path, BAR_WORDS):
+            return 0.4, "식사보다 술자리에 가까운 곳"
+        if subcategory and subcategory in path:
+            return 1.0, f"세부 종류 '{subcategory}' 일치"
+        if query and query in path and not generic:
+            return 0.9, f"'{query}' 업종 일치"
+        if category and category in actual:
+            return 0.75, "요청 종류와 일치"
+        if category and actual & related_categories(category):
+            return 0.6, f"비슷한 종류 ({segment})"
+        return 0.5, "업종으로 종류를 확인하지 못함"
+
+    if not place_category:
         return None
-    if subcategory and subcategory in path:
+    if subcategory and subcategory in place_category:
         return 1.0, f"세부 종류 '{subcategory}' 일치"
-    if query and query in path:
+    if query and query in place_category and not generic:
         return 0.9, f"'{query}' 업종 일치"
-    if category and (place_category == category or any(w in path for w in CATEGORY_WORDS.get(category, ()))):
+    if category and place_category == category:
         return 0.75, "요청 종류와 일치"
     return 0.4, "업종 정보가 요청과 직접 일치하지 않음"
 
@@ -104,7 +199,7 @@ def access_score(
     if distance_m is None:
         return None
     scale = scale_m * MODE_SCALE.get(mode or "", 1.0)
-    base = _decay(distance_m, scale)
+    base = _decay(max(0.0, distance_m - NEAR_M), scale)
     dist_text = f"기준점에서 {round(distance_m):,}m"
 
     if mode == "walk":
@@ -170,7 +265,7 @@ def weather_score(indoor: bool | None, weather: dict | None, inferred: bool = Fa
 
 
 def cross_score(sources: list[str], popularity: float | None = None) -> tuple[float, str] | None:
-    """Kakao / Naver 등 여러 Provider에서 교차 확인되었는지. 인기 신호가 있으면 함께 반영한다."""
+    """Kakao / Naver 등 여러 Provider에서 교차 확인되었는지. 검색 순위·인기 신호(popularity_signal)가 있으면 함께 반영한다."""
     real = set(sources)
     if not real and popularity is None:
         return None
@@ -178,7 +273,7 @@ def cross_score(sources: list[str], popularity: float | None = None) -> tuple[fl
     reason = f"{len(real)}개 출처에서 확인" if real else "단일 출처"
     if popularity is not None:
         value = 0.5 * value + 0.5 * min(max(popularity, 0.0), 1.0)
-        reason += ", 인기 신호 반영"
+        reason += ", 검색 순위 반영"
     return value, reason
 
 
