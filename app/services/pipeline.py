@@ -5,6 +5,7 @@ from app.config import settings
 from app.schemas.api import RecommendResponse, RequestResult
 from app.schemas.intent import UserIntent
 from app.services.api_router import APIRouterService
+from app.services.search_keyword import search_keyword
 from app.services.context_service import ContextService, reference_point
 from app.services.place_merger import PlaceMerger
 from app.services.location_resolver import LocationResolver
@@ -14,6 +15,7 @@ from app.services.scoring import haversine_m
 from app.services.exact_place_matcher import ExactPlaceMatcher
 from app.services.hard_filter import HardFilter
 from app.services.region_registry import get_region_registry
+from app.services.router_lexicon import INDOOR_WORDS
 
 UNSUPPORTED_NOTICE = (
     "장소 추천이나 검색 요청으로 이해하지 못했습니다. "
@@ -58,6 +60,20 @@ def in_provider_order(
                 continue
         ordered.append(place)
     return ordered[:limit]
+
+
+def apply_rain_hint(weather: dict | None, rain_hint: bool) -> dict | None:
+    """사용자가 '비 오는데'라고 말했으면 실제 관측과 관계없이 비 오는 날로 계산한다.
+
+    관측상 비가 오지 않는데 사용자 말로 바꾼 경우 user_hint=True를 남겨,
+    답변에서 '지금 비가 와서'가 아니라 '비가 온다고 하셔서'라고 말하게 한다.
+    """
+    if not rain_hint:
+        return weather
+    if weather and weather.get("is_raining"):
+        return weather
+    return {**(weather or {}), "is_raining": True, "precipitation": "rain", "user_hint": True,
+            "source": (weather or {}).get("source", "user")}
 
 
 def in_busan(place: Place) -> bool:
@@ -108,6 +124,14 @@ class RecommendationPipeline:
         """anchor_override/radius_m: 주변 시설 찾기처럼 좌표를 이미 알고 있을 때 위치 해석을 건너뛰고
         해당 좌표 기준 반경 검색을 한다. 이 경우 결과는 가까운 순으로 정렬한다."""
         started = time.perf_counter()
+
+        # '비 오는 날'은 날씨 점수(비 오는 날 실내 가점)로 반영한다. LLM이 이것을 실내 조건(indoor=true)으로
+        # 바꾸면 하드 필터가 해수욕장·공원을 후보에서 지워 버려서, 사용자가 '실내'를 직접 말했을 때만 남긴다.
+        if rain_hint and not any(word in (message or "") for word in INDOOR_WORDS):
+            intent = intent.model_copy(deep=True)
+            for req in intent.requests:
+                if req.indoor is True:
+                    req.indoor = None
 
         if intent.intent == "unsupported":
             return RecommendResponse(
@@ -161,7 +185,12 @@ class RecommendationPipeline:
         # requests[]의 각 장소 요구를 병렬로 검색한다.
         search_started = time.perf_counter()
         searches = await asyncio.gather(
-            *(self.api_router.search(request=req, location=search_location, anchor=anchor, radius_m=radius_m) for req in intent.requests)
+            *(
+                # '책 읽을 곳' 같은 설명형 검색어는 검색할 때만 업종 단어('북카페')로 바꾼다 (표시·점수는 원래 검색어).
+                self.api_router.search(request=req.model_copy(update={"query": search_keyword(req)}),
+                                       location=search_location, anchor=anchor, radius_m=radius_m)
+                for req in intent.requests
+            )
         )
         search_ms = (time.perf_counter() - search_started) * 1000
 
@@ -241,11 +270,12 @@ class RecommendationPipeline:
                 if point is None and region is not None:
                     point = (region.latitude, region.longitude)
                 if not weather_checked:
-                    weather = await self.context.weather(point)
-                    if rain_hint:
-                        weather = {**(weather or {}), "is_raining": True, "source": (weather or {}).get("source", "user")}
+                    # 날씨와 지하철역은 서로 기다릴 필요가 없으므로 동시에 조회한다 (NFR-001 응답 시간).
+                    weather, stations = await asyncio.gather(self.context.weather(point), self.context.stations(point))
+                    weather = apply_rain_hint(weather, rain_hint)
                     weather_checked = True
-                stations = await self.context.stations(point)
+                else:
+                    stations = await self.context.stations(point)
                 context_ms += (time.perf_counter() - context_started) * 1000
                 ranking_started = time.perf_counter()
                 ranked = self.recommender.rank(

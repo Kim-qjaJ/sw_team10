@@ -1,10 +1,35 @@
 import math
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 import httpx
 from app.config import settings
 
+KST = ZoneInfo("Asia/Seoul")
+# 초단기실황은 한 시간에 한 번 갱신되므로 (격자, 기준 시각)이 같으면 다시 호출하지 않는다.
+CACHE_MAX_ENTRIES = 256
+# 강수형태(PTY) 코드 → 표현. 0은 강수 없음.
+PRECIPITATION_TYPES = {"1": "rain", "2": "sleet", "3": "snow", "5": "rain", "6": "sleet", "7": "snow"}
+
+
+def kma_endpoint(url: str) -> str:
+    """KMA_API_URL에 기능 이름이 빠져 있으면(서비스 주소까지만 적은 경우) 초단기실황 조회를 붙인다.
+    서비스 주소만 부르면 '해당 오픈API 서비스가 없거나 폐기됨'(HTTP 400)이 온다."""
+    url = url.rstrip("/")
+    return url if url.rsplit("/", 1)[-1].startswith("get") else f"{url}/getUltraSrtNcst"
+
+
 class WeatherProvider:
     name = "weather"
+
+    def __init__(self) -> None:
+        self._cache: dict[tuple[int, int, str, str], dict] = {}
+        # 날씨는 실패해도 추천을 막지 않고 None을 돌려주므로, 원인을 /api/v1/status에서 볼 수 있게 남긴다.
+        self.last_error: str | None = None
+        self.last_ok: str | None = None
+
+    def status(self) -> dict:
+        return {"last_ok": self.last_ok, "last_error": self.last_error, "cached": len(self._cache)}
 
     def _dfs_xy(self, lat: float, lon: float) -> tuple[int, int]:
         """위도/경도를 기상청 격자 좌표(nx, ny)로 변환하는 내부 격자 변환 함수"""
@@ -51,13 +76,19 @@ class WeatherProvider:
             return None
 
         nx, ny = self._dfs_xy(latitude, longitude)
+        url = kma_endpoint(settings.kma_api_url)
 
         # 2. 기준 시간 계산 (초단기실황은 매시각 40분 이후 정시 데이터 제공)
-        now = datetime.now()
+        # 서버 시간대와 관계없이 한국 시간으로 계산한다.
+        now = datetime.now(KST)
         if now.minute < 45:
             now -= timedelta(hours=1)
         base_date = now.strftime("%Y%m%d")
         base_time = now.strftime("%H00")
+
+        cache_key = (nx, ny, base_date, base_time)
+        if cache_key in self._cache:
+            return dict(self._cache[cache_key])
 
         params = {
             "serviceKey": api_key,
@@ -73,27 +104,35 @@ class WeatherProvider:
         # 3. 비동기 HTTP 요청
         async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
             try:
-                response = await client.get(settings.kma_api_url, params=params)
+                response = await client.get(url, params=params)
                 response.raise_for_status()
                 data = response.json()
-            except Exception:
+            except httpx.HTTPStatusError as exc:
+                self.last_error = f"HTTP {exc.response.status_code} {' '.join(exc.response.text.split())[:150]}"
+                return None
+            except Exception as exc:
+                self.last_error = f"{type(exc).__name__}: {str(exc)[:150]}"
                 return None
 
         # 4. 응답 해석
         try:
             items = data["response"]["body"]["items"]["item"]
         except (KeyError, TypeError):
+            header = (data.get("response") or {}).get("header") if isinstance(data, dict) else None
+            self.last_error = f"응답에 관측값 없음 ({base_date} {base_time}, 격자 {nx},{ny}): {header or str(data)[:150]}"
             return None
 
         is_raining = False
+        precipitation = None
         temperature = None
 
         for item in items:
             category = item.get("category")
             obsr_val = item.get("obsrValue")
             if category == "PTY":  # 강수 형태 (0: 없음, 1: 비, 2: 비/눈, 3: 눈 등)
-                if obsr_val and obsr_val != "0":
+                if obsr_val and str(obsr_val) != "0":
                     is_raining = True
+                    precipitation = PRECIPITATION_TYPES.get(str(obsr_val), "rain")
             elif category == "T1H":  # 기온
                 if obsr_val:
                     try:
@@ -101,8 +140,15 @@ class WeatherProvider:
                     except ValueError:
                         pass
 
-        return {
+        result = {
             "is_raining": is_raining,
+            "precipitation": precipitation,
             "temperature": temperature,
             "source": "kma",
         }
+        self.last_ok = f"{base_date} {base_time} 격자 {nx},{ny}"
+        self.last_error = None
+        if len(self._cache) >= CACHE_MAX_ENTRIES:
+            self._cache.clear()
+        self._cache[cache_key] = result
+        return dict(result)

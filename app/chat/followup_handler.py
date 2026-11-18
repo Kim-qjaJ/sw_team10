@@ -10,9 +10,12 @@ from app.chat.session import SessionState, has_places
 from app.schemas.api import ChatRequest, RecommendResponse
 from app.schemas.intent import PlaceRequest
 from app.services.context_service import mentions_rain
-from app.services.followup import MAX_EXPAND_M, FollowupPlan, next_radius
-from app.services.mode_router import NEARBY_RADII_M, format_radius
+from app.services.followup import NEAR_PATTERN, FollowupPlan, next_radius
+from app.services.search_radius import MAX_EXPAND_M, POINT_RADIUS_M
+from app.services.local_router import select_recent_places
+from app.services.mode_router import format_radius
 from app.services.pipeline import provider_failure_notice
+from app.services.response_writer import with_weather
 
 
 async def handle_followup(
@@ -35,9 +38,19 @@ async def handle_followup(
     if anchor is None and not plan.same_query and any(r.search_mode == "exact_place" for r in last.intent.requests):
         first = next((p for p in (state.last_places or []) if p.get("latitude") is not None), None)
         if first is not None:
-            anchor, radius = (first["latitude"], first["longitude"]), 1500
+            anchor, radius = (first["latitude"], first["longitude"]), POINT_RADIUS_M
             display_location = f"{first['name']} 근처"
             intent = intent.model_copy(update={"location": first["name"]})
+
+    # '3번 근처 맛집', '거기 주변 카페': 직전 결과 중 그 장소 좌표를 기준점으로 쓴다.
+    near_place = None
+    if NEAR_PATTERN.search(request.message) and not plan.expand:
+        picked = select_recent_places(request.message, state.last_places or [])
+        if picked and picked[0].get("latitude") is not None and picked[0].get("longitude") is not None:
+            near_place = picked[0]
+            anchor, radius = (near_place["latitude"], near_place["longitude"]), POINT_RADIUS_M
+            display_location = f"{near_place['name']} 근처"
+            intent = intent.model_copy(update={"location": near_place["name"]})
 
     if plan.expand:
         if anchor is None:
@@ -47,7 +60,9 @@ async def handle_followup(
             return simple_response(None, intent, started, "local",
                                    notice=f"이미 최대 범위({format_radius(MAX_EXPAND_M)})까지 찾았어요.")
 
-    exclude = set(last.shown) if plan.same_query else set()
+    exclude = set(last.shown) if plan.same_query and near_place is None else set()
+    if near_place is not None:
+        exclude.add(str(near_place["name"]).strip())  # 기준이 된 장소 자신은 빼고 보여준다.
     nearby_like = last.from_user_location or last.mode == "nearby"
     response: RecommendResponse | None = None
     # 결과가 없으면(기준점이 있을 때) 반경을 단계적으로 넓혀 다시 찾는다.
@@ -61,19 +76,28 @@ async def handle_followup(
         if has_places(response) or provider_failure_notice(response.results) or anchor is None:
             break
         bigger = next_radius(radius)
-        if bigger is None or bigger > NEARBY_RADII_M[-1] * 2:
+        if bigger is None or bigger > MAX_EXPAND_M:
             break
         radius = bigger
 
     response.radius_m = radius if anchor else None
     if last.from_user_location and anchor is not None:
-        display_location = f"현재 위치 {format_radius(radius or 1500)} 이내"
+        display_location = f"현재 위치 {format_radius(radius or POINT_RADIUS_M)} 이내"
     count = sum(len(result.places) for result in response.results)
     query = ", ".join(r.query for r in requests)
     if count:
-        widened = f"범위를 {format_radius(radius)}까지 넓혀 " if radius and radius != last.radius_m and anchor else ""
-        other = "다른 " if exclude else ""
-        response.message = f"{widened}{other}{query} {count}곳을 찾았어요."
+        widened = (
+            f"범위를 {format_radius(radius)}까지 넓혀 "
+            if radius and anchor and radius != (POINT_RADIUS_M if near_place is not None else last.radius_m)
+            else ""
+        )
+        other = "다른 " if exclude and near_place is None else ""
+        where = f"{near_place['name']} 근처 " if near_place is not None else ""
+        response.message = f"{widened}{where}{other}{query} {count}곳을 찾았어요."
+        # 거리순(주변 시설)이나 검색 순서 그대로 보여주는 경우가 아니면 순위에 반영된 날씨를 알려준다.
+        if not nearby_like and last.mode != "search":
+            response.message = with_weather(response.message, (response.context or {}).get("weather"),
+                                            response.results, intent.location)
     elif not provider_failure_notice(response.results):
         response.notice = FOLLOWUP_EXHAUSTED if exclude else f"'{query}' 검색 결과가 없어요."
 
@@ -81,7 +105,7 @@ async def handle_followup(
         ctx, request, intent, response, started, "local",
         radius_m=radius if anchor else None,
         from_user_location=last.from_user_location,
-        keep_shown=plan.same_query,
+        keep_shown=plan.same_query and near_place is None,
     )
     if display_location:
         finished.intent = intent.model_copy(update={"location": display_location})

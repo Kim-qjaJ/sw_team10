@@ -144,6 +144,19 @@ def requested_place_fields(message: str) -> set[str]:
     return fields
 
 
+_KOREAN_ORDINALS = {"첫": 1, "두": 2, "세": 3, "네": 4, "다섯": 5}
+
+
+def _requested_rank(text: str) -> int | None:
+    """'3번', '12번', '두 번째' → 번호. 화면에 보이는 최대 20개까지 고른다."""
+    if match := re.search(r"(?<!\d)(\d{1,2})\s?번(?!\s?째)", text):
+        rank = int(match.group(1))
+        return rank if 1 <= rank <= 20 else None
+    if match := re.search(r"(다섯|첫|두|세|네)\s?번\s?째", text):
+        return _KOREAN_ORDINALS[match.group(1)]
+    return None
+
+
 def select_recent_places(message: str, places: list[dict]) -> list[dict]:
     """'1번/첫 번째/장소명/전부' 표현으로 직전 추천 결과를 선택한다."""
     if not places:
@@ -153,16 +166,18 @@ def select_recent_places(message: str, places: list[dict]) -> list[dict]:
     if any(word in text for word in ("전부", "모두", "전체", "추천한 곳들", "장소들")):
         return places
 
-    ordinal_patterns = {
-        1: ("1번", "첫번째", "첫 번째"),
-        2: ("2번", "두번째", "두 번째"),
-        3: ("3번", "세번째", "세 번째"),
-        4: ("4번", "네번째", "네 번째"),
-        5: ("5번", "다섯번째", "다섯 번째"),
-    }
-    for rank, patterns in ordinal_patterns.items():
-        if any(pattern in text for pattern in patterns):
-            return [place for place in places if place.get("rank") == rank][:1]
+    rank = _requested_rank(text)
+    if rank is not None:
+        # 여러 묶음(맛집·카페)을 함께 보여준 뒤 '카페 2번'이라고 하면 그 묶음 안의 2번을 고른다.
+        groups = {place.get("group_query") for place in places if place.get("group_query")}
+        if len(groups) > 1:
+            # '카페 2번 근처 맛집'처럼 묶음 이름이 여러 개면 번호 바로 앞에 쓴 묶음을 고른다.
+            number_at = re.search(r"\d{1,2}\s?번|(다섯|첫|두|세|네)\s?번\s?째", text).start()
+            before = [(text.rfind(g.lower(), 0, number_at), g) for g in groups]
+            named_group = max(((pos, g) for pos, g in before if pos >= 0), default=(None, None))[1]
+            if named_group is not None:
+                return [p for p in places if p.get("group_query") == named_group and p.get("group_rank") == rank][:1]
+        return [place for place in places if place.get("rank") == rank][:1]
 
     named = [place for place in places if place.get("name") and place["name"].lower() in text]
     if named:
@@ -176,10 +191,11 @@ def select_recent_places(message: str, places: list[dict]) -> list[dict]:
 def _asks_new_search(message: str) -> bool:
     """'거기 근처 카페 알려줘'처럼 새 장소 종류를 찾는 문장은 상세질문이 아니다."""
     text = _normalize(message)
-    if re.search(r"\d번|번째", text):
-        return False
+    # '1번 근처 맛집 알려줘'는 1번 장소 정보가 아니라 그 주변을 새로 찾는 요청이다.
     if any(word in text for word in ("근처", "주변", "부근")):
         return True
+    if re.search(r"\d번|번째", text):
+        return False
     text = re.sub(r"그\s?(가게|카페|식당)", "", text)
     return any(_strip_particles(token, CATEGORIES) for token in re.findall(r"[0-9a-z가-힣]+", text))
 
@@ -399,6 +415,11 @@ COUNT_PATTERN = re.compile(r"(\d+|한|두|세|네|다섯|여섯|일곱|여덟|�
 _COUNT_WORDS = {"한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8, "아홉": 9, "열": 10}
 
 
+def unknown_terms(message: str) -> list[str]:
+    """사전에 없어 Local Router가 해석하지 못한 단어들. 질의 로그에 남겨 사전 보강 후보로 쓴다."""
+    return list(dict.fromkeys(_parse(message).unknown))
+
+
 def requested_count(message: str) -> int | None:
     """'관광지 3개만 추천해줘' → 3. 개수를 말하지 않으면 None."""
     match = COUNT_PATTERN.search(message)
@@ -413,8 +434,29 @@ def _strip_count(text: str) -> str:
     return COUNT_PATTERN.sub(" ", text)
 
 
+# '해운대 해수욕장'처럼 띄어 쓴 지점 이름을 사전 표기('해운대해수욕장')로 붙인다.
+# 띄어 쓰면 '해수욕장'이 찾을 장소 종류로 읽혀 위치가 '해운대'로 넓어지기 때문이다.
+_SPACED_POINTS = sorted(
+    (
+        (point[: -len(suffix)] + " " + suffix, point)
+        for point in BUSAN_POINTS
+        for suffix in POINT_SUFFIXES
+        if point.endswith(suffix) and len(point) > len(suffix)
+    ),
+    key=lambda pair: len(pair[0]),
+    reverse=True,
+)
+
+
+def _join_spaced_points(text: str) -> str:
+    for spaced, joined in _SPACED_POINTS:
+        if spaced in text:
+            text = re.sub(rf"{re.escape(spaced[: spaced.rindex(' ')])}\s+{re.escape(spaced[spaced.rindex(' ') + 1:])}", joined, text)
+    return text
+
+
 def _parse(message: str) -> _Parsed:
-    text = _strip_count(message.strip().lower())
+    text = _join_spaced_points(_strip_count(message.strip().lower()))
     # 띄어 쓴 복합 종류가 각각의 시설 요청으로 분리되지 않게 한다.
     text = re.sub(r"북\s+카페", "북카페", text)
     text = re.sub(r"스터디\s+카페", "스터디카페", text)
@@ -678,7 +720,7 @@ def split_query(message: str, previous_location: str | None = None, pending_loca
     brands: list[str] = []
     non_busan: list[str] = []
 
-    text = re.sub(r"(그|이)\s+근처", r"\1근처", _strip_count(message.strip()))
+    text = re.sub(r"(그|이)\s+근처", r"\1근처", _join_spaced_points(_strip_count(message.strip())))
     text = re.sub(r"북\s+카페", "북카페", text)
     text = re.sub(r"스터디\s+카페", "스터디카페", text)
     preferred = _parse(text).prefer_region_words

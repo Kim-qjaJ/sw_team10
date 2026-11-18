@@ -108,3 +108,10 @@ class OtherRouteTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_spaced_point_name_is_one_place():
+    """'해운대 해수욕장 근처 맛집'은 해수욕장을 찾는 게 아니라 해운대해수욕장 근처 맛집이다."""
+    route = route_place_query("해운대 해수욕장 근처 맛집")
+    assert route.intent.location == "해운대해수욕장"
+    assert [r.category for r in route.intent.requests] == ["restaurant"]

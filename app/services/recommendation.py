@@ -11,14 +11,14 @@ import logging
 from app.schemas.intent import PlaceRequest, UserIntent
 from app.schemas.place import Place
 from app.services.scoring import (
-    WEIGHTS, access_score, busan_score, category_path, category_score, condition_score, cross_score, haversine_m,
-    infer_indoor, weather_score,
+    access_score, busan_score, category_path, category_score, condition_score, cross_score, haversine_m,
+    infer_indoor_with_name, weather_score, weights_for,
 )
+from app.services.search_radius import POINT_RADIUS_M
 
 logger = logging.getLogger(__name__)
 
-# 기준 시설(역, 구청 등) 주변 추천의 기본 반경(m)
-POINT_RADIUS_M = 1500
+# 기준 시설(역, 구청 등) 주변 추천의 기본 반경은 search_radius.py의 POINT_RADIUS_M을 쓴다.
 
 FALLBACK_REASON = "점수 계산에 실패해 기본 순위(인기·거리순)로 보여줍니다"
 
@@ -78,6 +78,7 @@ class RecommendationService:
         weather: dict | None,
         score_anchor: tuple[float, float] | None,
     ) -> list[Place]:
+        weights = weights_for(weather)
         scored: list[Place] = []
         for original in places:
             place = original.model_copy(deep=True)
@@ -91,7 +92,7 @@ class RecommendationService:
 
             path = category_path(place.source_categories, place.subcategory)
             # 실내/야외 정보가 없으면 업종으로 추정해 점수에만 쓴다 (Place.indoor는 바꾸지 않는다).
-            indoor = place.indoor if place.indoor is not None else infer_indoor(path)
+            indoor = place.indoor if place.indoor is not None else infer_indoor_with_name(path, place.name)
             inferred = place.indoor is None and indoor is not None
             items = {
                 "category": category_score(request.category, request.subcategory, request.query,
@@ -106,7 +107,7 @@ class RecommendationService:
                 "busan": busan_score(place.busan_verified, place.region_match),
             }
             total = used = 0.0
-            for key, weight in WEIGHTS.items():
+            for key, weight in weights.items():
                 item = items[key]
                 if item is None:
                     place.score_breakdown[key] = {"score": 0.0, "max": weight, "reason": "정보 없음", "available": False}
@@ -117,7 +118,7 @@ class RecommendationService:
                 place.score_breakdown[key] = {"score": round(value * weight, 1), "max": weight,
                                               "reason": reason, "available": True}
             place.score = round(total / used * 100, 1) if used else 0.0
-            place.data_confidence = round(used / sum(WEIGHTS.values()), 2)
+            place.data_confidence = round(used / sum(weights.values()), 2)
             # 정보가 적은 장소가 환산 덕분에 위로 오르지 않도록 순위에는 신뢰도를 반영한다.
             place.rank_score = round(place.score * (0.8 + 0.2 * place.data_confidence), 1)
             scored.append(place)

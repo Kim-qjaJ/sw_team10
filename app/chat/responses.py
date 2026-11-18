@@ -59,7 +59,9 @@ def finish_search(
     )
     response.route = route_type
     if response.message is None and response.results:
-        response.message = ResponseWriter.template_summary(response.intent, response.results)
+        response.message = ResponseWriter.template_summary(
+            response.intent, response.results, (response.context or {}).get("weather")
+        )
     response.timing_ms = {
         "intent_llm_ms": llm_ms,
         **response.timing_ms,

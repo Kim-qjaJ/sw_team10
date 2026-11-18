@@ -68,7 +68,7 @@ async def handle_nearby(ctx, request: ChatRequest, started: float) -> RecommendR
         ctx.sessions.save_pending(session_id, waiting)
         return clarify_response(NEARBY_OUTSIDE_BUSAN, started)
 
-    # 3) 현재 위치 기준 1km → 3km → 5km 순으로 넓혀 가며 찾는다.
+    # 3) 현재 위치 기준 1.5km → 3km → 5km 순으로 넓혀 가며 찾는다.
     response: RecommendResponse | None = None
     radius = NEARBY_RADII_M[0]
     for radius in NEARBY_RADII_M:

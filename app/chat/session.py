@@ -93,9 +93,13 @@ class SessionStore:
         state = self._sessions.get(session_id) if session_id else None
         if not state or not response.results:
             return
+        # 번호는 화면 카드와 같게 묶음을 넘어 1번부터 이어서 매긴다.
+        # '카페 2번'처럼 묶음 안 번호로 부를 때를 위해 묶음 검색어와 묶음 안 번호도 남긴다.
         places = [
             {
                 "rank": rank,
+                "group_query": group_query,
+                "group_rank": group_rank,
                 "name": place.name,
                 "category": place.category,
                 "address": place.address,
@@ -108,8 +112,14 @@ class SessionStore:
                 "sources": place.sources,
                 "score": place.score,
             }
-            for result in response.results
-            for rank, place in enumerate(result.places, start=1)
+            for rank, (group_query, group_rank, place) in enumerate(
+                (
+                    (result.request.query, group_rank, place)
+                    for result in response.results
+                    for group_rank, place in enumerate(result.places, start=1)
+                ),
+                start=1,
+            )
         ]
         if places:
             state.last_places = places

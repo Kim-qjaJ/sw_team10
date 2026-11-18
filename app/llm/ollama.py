@@ -22,6 +22,7 @@ class OllamaIntentParser(BaseIntentParser):
             "messages": messages,
             "format": self.schema if settings.ollama_structured_output else "json",
             "stream": False,
+            "think": settings.ollama_think,
             "keep_alive": settings.ollama_keep_alive,
             "options": {"temperature": 0},
         }

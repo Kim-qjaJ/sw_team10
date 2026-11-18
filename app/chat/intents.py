@@ -1,7 +1,10 @@
 """LLM Intent 해석과 해석 결과 보정."""
 
+import asyncio
+
 from fastapi import HTTPException
 
+from app.config import settings
 from app.llm.base import IntentParseError, LLMRateLimitedError, LLMUnavailableError
 from app.schemas.intent import UserIntent
 from app.services.local_router import needs_session_context
@@ -69,6 +72,21 @@ def normalize_search_modes(intent: UserIntent) -> UserIntent:
     return UserIntent.model_validate(data)
 
 
+def keep_free_condition(message: str, intent: UserIntent) -> UserIntent:
+    """'무료 전시'라고 했는데 LLM이 검색어를 '전시'로 줄이면 무료 조건이 사라지므로 다시 붙인다 (FR-042)."""
+    if "무료" not in message or not intent.requests:
+        return intent
+    data = intent.model_dump()
+    changed = False
+    for request in data["requests"]:
+        query = str(request.get("query") or "")
+        exhibit = request.get("category") == "culture" and (request.get("subcategory") == "exhibition" or "전시" in query)
+        if exhibit and "무료" not in query:
+            request["query"] = f"무료 {query}".strip()
+            changed = True
+    return UserIntent.model_validate(data) if changed else intent
+
+
 def merge_with_session(previous: UserIntent | None, current: UserIntent, message: str = "") -> UserIntent:
     """명시적인 새 검색에는 이전 조건을 섞지 않고, 참조형 후속 질문에만 문맥을 상속한다."""
     if previous is None or current.intent in {"smalltalk", "place_detail", "compare_results", "clarify", "unsupported"}:
@@ -111,7 +129,20 @@ async def parse_intent(ctx, message: str, session_id: str | None = None) -> tupl
     context_intent = previous_intent if needs_session_context(message) else None
 
     try:
-        parsed_intent, llm_ms = await ctx.intent_parser.parse(message, previous_intent=context_intent)
+        # LLM 응답이 늦으면 기다리지 않는다. 호출한 쪽은 사전으로 확인된 조건이 있으면 기본 검색으로 이어간다.
+        parsed_intent, llm_ms = await asyncio.wait_for(
+            ctx.intent_parser.parse(message, previous_intent=context_intent),
+            timeout=settings.llm_intent_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "code": "llm_timeout",
+                "message": f"LLM이 {settings.llm_intent_timeout_seconds:g}초 안에 응답하지 않았어요. "
+                           "'서면 카페 추천해줘'처럼 지역과 장소 종류를 함께 적으면 LLM 없이 바로 검색할 수 있어요.",
+            },
+        )
     except LLMRateLimitedError as exc:
         raise HTTPException(
             status_code=503,

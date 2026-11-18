@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 import httpx
 from app.config import settings
@@ -11,6 +12,19 @@ from app.providers.tour import TourProvider
 from app.schemas.api import ProviderStatus
 from app.schemas.intent import PlaceRequest
 from app.schemas.place import Place
+
+# 대기 시간을 넘긴 뒤에도 뒤에서 마저 실행 중인 Provider 호출 (작업이 중간에 사라지지 않게 참조를 둔다)
+_BACKGROUND: set[asyncio.Future] = set()
+
+
+def error_message(body: str | None) -> str:
+    """오류 응답 본문에서 원인 메시지. 공공데이터포털은 errMsg·returnAuthMsg에 원인을 담는다."""
+    text = body or ""
+    found = [m.group(2) for m in re.finditer(r'"?(errMsg|returnAuthMsg)"?\s*[:>]\s*"?([^"<,}]+)', text)]
+    if found:
+        return " / ".join(dict.fromkeys(f.strip() for f in found if f.strip()))[:160]
+    return " ".join(text.split())[:120]
+
 
 class APIRouterService:
     def __init__(self):
@@ -67,13 +81,27 @@ class APIRouterService:
             except httpx.HTTPStatusError as e:
                 code = e.response.status_code
                 state = "rate_limited" if code == 429 else "error"
-                return provider.name, [], ProviderStatus(status=state, detail=f"HTTP {code}")
+                # 공공데이터포털은 활용 신청 전·키 오류를 본문 메시지로 알려준다. 원인 파악용으로 앞부분만 남긴다.
+                detail = f"HTTP {code} {error_message(e.response.text)}".strip()
+                return provider.name, [], ProviderStatus(status=state, detail=detail)
             except Exception as e:
                 return provider.name, [], ProviderStatus(status="error", detail=f"{type(e).__name__}: {e}")
 
+        async def fetch_with_cap(provider):
+            # 늦는 Provider 하나 때문에 전체 응답이 늦어지지 않게 기다리는 시간을 제한한다 (NFR-001).
+            # shield: 제한 시간이 지나도 진행 중인 호출은 끊지 않는다 (부산 목록처럼 받아 두면 캐시로 남는 경우).
+            task = asyncio.ensure_future(fetch_provider(provider))
+            _BACKGROUND.add(task)
+            task.add_done_callback(_BACKGROUND.discard)
+            try:
+                return await asyncio.wait_for(asyncio.shield(task), timeout=settings.provider_wait_seconds)
+            except asyncio.TimeoutError:
+                detail = f"{settings.provider_wait_seconds:g}초 안에 응답이 없어 이 출처 없이 결과를 보여줬어요"
+                return provider.name, [], ProviderStatus(status="timeout", detail=detail)
+
         # 모든 active_providers를 동시에 비동기(asyncio.gather)로 호출
         results = await asyncio.gather(
-            *[fetch_provider(p) for p in active_providers],
+            *[fetch_with_cap(p) for p in active_providers],
             return_exceptions=True
         )
 
