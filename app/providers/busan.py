@@ -27,6 +27,7 @@ import httpx
 
 from app.config import settings
 from app.providers.base import PlaceProvider, ProviderNotConfigured
+from app.providers import rest_days
 from app.providers.districts import district_name
 from app.schemas.intent import PlaceRequest
 from app.schemas.place import Place
@@ -227,6 +228,25 @@ def clean_text(value) -> str:
     return text
 
 
+# 전시 상세 글에서 쉬는 날 문장을 찾는다 ('매주 월요일 휴관', '휴관일: 1월 1일').
+_REST_SENTENCE = re.compile(r"[^.\n/·]*?(?:휴관|휴무|휴장|관람\s*불가)[^.\n/]*")
+
+
+def exhibit_rest(detail: dict) -> str | None:
+    """전시 상세(소개 글 등)에 적힌 쉬는 날. 전시장 정보보다 전시 자체의 일정이 먼저다 (2026-11-23 검토)."""
+    texts = []
+    for key, value in detail.items():
+        if isinstance(value, str) and not key.lower().endswith(("url", "addr", "phone", "gpsx", "gpsy")):
+            texts.append(rest_days.clean_rest(value) or "")
+    found = []
+    for text in texts:
+        for sentence in _REST_SENTENCE.findall(text):
+            sentence = re.sub(r"\s+", " ", sentence).strip(" :-")
+            if sentence and sentence not in found and len(sentence) <= 80:
+                found.append(sentence)
+    return " / ".join(found[:2]) or None
+
+
 def is_free(price: str | None) -> bool | None:
     """상세 조회의 가격 문구로 무료 여부를 판단한다. 문구가 없으면 모름(None)."""
     text = clean_text(price)
@@ -399,6 +419,10 @@ class BusanProvider(PlaceProvider):
             free = is_free(detail.get("price"))
             if free_only and free is not True:
                 continue
+            # 전시마다 오늘 관람할 수 있는지 먼저 본다. 전시 글에 오늘이 쉬는 날로 적혀 있으면 그 전시는 뺀다.
+            event_rest = exhibit_rest(detail)
+            if rest_days.closed_on(event_rest, today):
+                continue
             start, end = parse_date(item.get("op_st_dt")), parse_date(item.get("op_ed_dt"))
             group = venues.setdefault(item["place"], {"item": item, "detail": detail, "events": []})
             # 같은 전시장의 전시 중 주소가 있는 상세를 쓴다.
@@ -410,6 +434,7 @@ class BusanProvider(PlaceProvider):
                 "end": end.isoformat() if end else None,
                 "open_run": False,
                 "free": free,
+                "rest": event_rest,
             })
 
         places: list[Place] = []
@@ -435,6 +460,18 @@ class BusanProvider(PlaceProvider):
                 busan_verified=True,
                 events=events[:MAX_EVENTS_PER_PLACE],
             ))
+        # 정기 휴관일: 저장된 것만 바로 쓰고, 모르는 전시장은 뒤에서 받아 다음 요청부터 반영한다.
+        unknown = []
+        for place in places:
+            known, rest = rest_days.cached_rest(place.name)
+            if not known:
+                unknown.append(place.name)
+            # 전시장 쉬는 날을 모르면 전시 글에 적힌 쉬는 날을 쓴다.
+            rest = rest or next((e["rest"] for e in place.events if e.get("rest")), None)
+            place.rest_info = rest
+            place.closed_today = rest_days.closed_on(rest, today)
+        if unknown:
+            rest_days.fetch_in_background(unknown)
         return _nearest(places, anchor)
 
     async def _fetch_culture_list(self, api_key: str) -> list[dict]:
@@ -546,8 +583,9 @@ async def prefetch_exhibits() -> None:
     try:
         items = await BusanProvider()._fetch_culture_list(api_key)
         today = today_kst()
-        seqs = [item["seq"] for item in items if is_ongoing(item, today) and in_busan(item["lat"], item["lng"])]
-        await _detail_fetch_task(seqs, api_key)
+        ongoing = [item for item in items if is_ongoing(item, today) and in_busan(item["lat"], item["lng"])]
+        await _detail_fetch_task([item["seq"] for item in ongoing], api_key)
+        await rest_days.fetch([item["place"] for item in ongoing])
     except Exception as exc:  # noqa: BLE001 - 미리 받기는 실패해도 넘어간다
         logger.warning("전시 정보 미리 받기 실패: %s", type(exc).__name__)
 

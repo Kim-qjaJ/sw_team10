@@ -1,0 +1,419 @@
+/* 메신저형 화면. 색은 이 변수만 바꾸면 전체에 적용됩니다. */
+:root {
+  --room-bg: #f5f6f8;
+  --head-bg: #ffffff;
+  --me-bubble: #fee500;
+  --bot-bubble: #eceef1;
+  --ink: #191919;
+  --sub: #4f5d6b;
+  --time: #8a949e;
+  --line: #e3e7ec;
+  --accent: #3c1e1e;
+  --avatar-fallback: #6f9fd8;
+  --radius: 14px;
+  font-family: "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  color: var(--ink);
+  -webkit-text-size-adjust: 100%;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: #e4e7eb; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+:focus-visible { outline: 2px solid #1d6fd1; outline-offset: 2px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* 전체 배치: 모바일은 화면 전체가 대화창.
+   PC(700px 이상)는 휴대폰처럼 9:16 대화창을 가운데 두고, 1100px 이상이면 지도를 오른쪽 위에 작게 띄운다. */
+.app { display: flex; height: 100dvh; margin: 0 auto; }
+.room {
+  flex: 0 0 auto; width: 100%; display: flex; flex-direction: column;
+  background: var(--room-bg); min-width: 0; position: relative;
+}
+@media (min-width: 700px) {
+  :root {
+    /* 모션: 열 때는 빠르게 출발해 부드럽게 멈추고, 닫을 때는 조금 더 빠르게 */
+    --ease-open: cubic-bezier(0.45, 0.05, 0.15, 1);
+    --ease-close: cubic-bezier(0.65, 0, 0.35, 1);
+    --dur-open: 0.6s;
+    --dur-close: 0.48s;
+    --phone-h: min(calc(100dvh - 40px), 940px);
+    --phone-w: min(calc(var(--phone-h) * 9 / 16), calc(100vw - 40px));
+  }
+  body { display: grid; place-items: center; min-height: 100dvh; overflow-x: hidden; }
+  .app {
+    height: var(--phone-h); width: var(--phone-w); min-width: 0;
+    margin: 20px auto;
+  }
+  .room {
+    height: 100%; border-radius: 28px; overflow: hidden;
+    transition: transform var(--dur-close) var(--ease-close);
+    box-shadow: 0 16px 48px rgb(0 0 0 / 0.18), 0 0 0 1px rgb(0 0 0 / 0.06);
+  }
+}
+
+/* 대화 영역만 줄어들고, 제목줄·빠른 답장·입력창은 원래 높이를 지킨다. */
+.room-header, .quick-replies, .composer { flex: 0 0 auto; }
+
+/* 상단 대화방 제목 */
+.room-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; background: var(--head-bg);
+  border-bottom: 1px solid rgb(0 0 0 / 0.06);
+  padding-top: max(10px, env(safe-area-inset-top));
+}
+.room-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.room-title > div { min-width: 0; }
+.room-title h1 { font-size: 16px; margin: 0; font-weight: 700; }
+.room-title p { font-size: 12px; margin: 2px 0 0; color: var(--sub); }
+.room-title h1, .room-title p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.header-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+.head-btn {
+  display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent;
+  padding: 6px 8px; border-radius: 8px; font-size: 13px; color: #2b3640; white-space: nowrap;
+}
+.head-btn:hover { background: rgb(0 0 0 / 0.05); }
+.head-btn[aria-expanded="true"] { background: rgb(0 0 0 / 0.08); }
+.head-btn svg { width: 18px; height: 18px; fill: currentColor; }
+@media (min-width: 1100px) { #toggle-map { display: none; } }
+
+/* 프로필 사진: 부기 이미지(/static/images/boogi.png)가 있으면 그 사진을 동그랗게 보여줍니다. */
+.avatar {
+  flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%;
+  background: var(--avatar-fallback); color: #fff; display: grid; place-items: center;
+  font-size: 15px; font-weight: 700; overflow: hidden;
+  border: 1px solid rgb(0 0 0 / 0.06);
+}
+.avatar::after { content: "부"; }
+.avatar.small { width: 36px; height: 36px; font-size: 14px; }
+.has-avatar .avatar {
+  background: #fff url("/static/images/boogi.png?v=20261117") center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.08);
+}
+.has-avatar .avatar::after { content: none; }
+
+/* 대화 영역 */
+.chat-log {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 12px 10px 16px; display: flex; flex-direction: column;
+}
+.chat-log > * { flex: 0 0 auto; }
+.start-credit {
+  margin-top: auto; padding: 16px 8px 0; text-align: center;
+  font-size: 11px; line-height: 1.5; color: #8a949e;
+}
+.start-credit p { margin: 0; }
+.start-credit p + p { margin-top: 2px; }
+.day-divider, .system-msg { display: flex; justify-content: center; margin: 10px 0 14px; }
+.day-divider span, .system-msg span {
+  background: #e9ecef; color: #5c6b79; font-size: 12px;
+  padding: 4px 12px; border-radius: 999px;
+}
+.system-msg span { background: #eef2f6; color: #4f5d6b; }
+
+.msg { display: flex; gap: 8px; margin: 4px 0 12px; }
+.msg.me { justify-content: flex-end; }
+.msg-body { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 5px; }
+.sender { font-size: 12px; color: var(--sub); margin: 1px 0 1px 2px; }
+.bubble-row { display: flex; align-items: flex-end; gap: 6px; }
+.msg.me .bubble-row { justify-content: flex-end; }
+.bubble-row time { font-size: 10.5px; color: var(--time); white-space: nowrap; flex: 0 0 auto; }
+.bubble {
+  position: relative; max-width: min(78%, 320px); padding: 8px 11px;
+  border-radius: var(--radius); font-size: 14.5px; line-height: 1.45;
+  word-break: keep-all; overflow-wrap: anywhere; white-space: pre-line;
+}
+.msg.me .bubble { background: var(--me-bubble); }
+.msg.bot .bubble { background: var(--bot-bubble); }
+/* 말풍선 꼬리: 상대 메시지는 왼쪽 위, 내 메시지는 오른쪽 위 */
+.msg.bot .msg-body > .bubble-row:nth-child(2) .bubble { border-top-left-radius: 4px; }
+.msg.bot .msg-body > .bubble-row:nth-child(2) .bubble::before {
+  content: ""; position: absolute; left: -6px; top: 0; width: 10px; height: 12px;
+  background: var(--bot-bubble); clip-path: polygon(100% 0, 0 0, 100% 100%);
+}
+.msg.me .bubble { border-top-right-radius: 4px; }
+.msg.me .bubble::after {
+  content: ""; position: absolute; right: -6px; top: 0; width: 10px; height: 12px;
+  background: var(--me-bubble); clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+.bubble p { margin: 0; }
+.bubble p + p { margin-top: 6px; }
+.bubble .notice { color: #8a4b00; font-size: 13px; }
+.bubble .meta { color: #6b7782; font-size: 12px; }
+.bubble.error p { color: #a12222; }
+.tag {
+  display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: #ffffff; color: #44515d; margin-bottom: 4px;
+}
+.tag.sample { background: #fff3c4; color: #6b5300; }
+.bubble-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.bubble-btn, .bubble-actions a {
+  display: inline-block; border: 1px solid var(--line); background: #f7f8fa; border-radius: 8px;
+  padding: 6px 10px; font-size: 13px; text-decoration: none; color: var(--ink);
+}
+.bubble-btn:hover, .bubble-actions a:hover { background: #eef1f4; }
+
+/* 입력 중 표시 */
+.typing-bubble { display: inline-flex; gap: 4px; padding: 12px 14px; }
+.typing-bubble .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: #9aa6b2;
+  animation: blink 1.2s infinite ease-in-out;
+}
+.typing-bubble .dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-bubble .dot:nth-child(3) { animation-delay: 0.3s; }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+/* 결과 카드: 옆으로 넘겨 보는 카드 묶음 */
+.result-block { display: flex; flex-direction: column; gap: 5px; margin-right: -10px; }
+.result-label { font-size: 12px; color: var(--sub); margin: 2px 0 0 2px; }
+.carousel {
+  display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory;
+  padding: 2px 10px 6px 0; scrollbar-width: thin;
+}
+.carousel-wrap { position: relative; }
+.carousel-nav { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .carousel-nav {
+    display: grid; place-items: center; position: absolute; top: calc(50% - 22px); z-index: 2;
+    width: 32px; height: 32px; border-radius: 50%; border: 1px solid #dfe3e8; background: rgb(255 255 255 / 0.95);
+    box-shadow: 0 2px 8px rgb(0 0 0 / 0.15); color: #2b3640; font-size: 18px; line-height: 1; padding: 0;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .carousel-nav.prev { left: 4px; }
+  .carousel-nav.next { right: 14px; }
+  .carousel-wrap:hover .carousel-nav, .carousel-nav:focus-visible { opacity: 1; }
+  .carousel-nav[hidden] { display: none; }
+}
+.place-card {
+  flex: 0 0 236px; scroll-snap-align: start; background: #fff; border-radius: var(--radius);
+  overflow: hidden; display: flex; flex-direction: column; font-size: 13px;
+  border: 1px solid #e1e5ea; box-shadow: 0 1px 3px rgb(0 0 0 / 0.05); transition: border-color 0.15s;
+}
+.place-card.selected { border-color: #f2c200; box-shadow: 0 0 0 2px #f2c200; }
+.card-photo { width: 100%; height: 128px; object-fit: cover; display: block; background: #e9edf1; }
+.card-body { padding: 10px 12px 8px; display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; }
+.card-head { display: flex; align-items: center; gap: 6px; }
+.card-head .tag { margin: 0; background: #eef2f6; }
+.num {
+  width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff;
+  display: grid; place-items: center; font-size: 11px; font-weight: 700; flex: 0 0 auto;
+}
+.place-card h3 { font-size: 15px; margin: 2px 0 0; line-height: 1.3; }
+.place-card p { margin: 0; color: #4b5560; line-height: 1.4; }
+.place-card .score { color: var(--ink); font-weight: 700; }
+.place-card .score small { font-weight: 400; color: #6b7782; }
+.place-card .metrics { color: #2b6cb0; }
+.place-card .src { color: #8a949e; font-size: 11.5px; }
+.events { margin: 2px 0; padding-left: 16px; color: #4b5560; }
+.events li { margin: 1px 0; }
+.place-card details { font-size: 12px; color: #4b5560; }
+.place-card summary { cursor: pointer; color: #6b7782; }
+.place-card details p { margin-top: 3px; }
+.near-row { display: flex; gap: 6px; padding: 0 12px 10px; }
+.near-btn {
+  flex: 1 1 0; border: 1px solid #e1e5ea; background: #f7f8fa; border-radius: 999px;
+  font-size: 12px; padding: 5px 0; color: #3b4651;
+}
+.near-btn:hover:not(:disabled) { background: #fffbe0; border-color: #f2d84d; }
+.near-btn:disabled { color: #b0b8c0; background: #f7f8fa; }
+.card-actions { display: flex; border-top: 1px solid var(--line); }
+.card-actions > * {
+  flex: 1 1 0; text-align: center; padding: 9px 4px; font-size: 13px; border: 0; background: #fff;
+  text-decoration: none; color: var(--ink);
+}
+.card-actions > * + * { border-left: 1px solid var(--line); }
+.card-actions > *:hover { background: #f6f7f9; }
+.card-actions .muted { color: #9aa4ad; cursor: default; }
+
+/* 빠른 답장 */
+.quick-replies {
+  display: flex; gap: 6px; overflow-x: auto; padding: 6px 10px 8px; scrollbar-width: none;
+}
+.quick-replies[hidden] { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .quick-replies { flex-wrap: wrap; overflow-x: visible; }
+}
+.quick-replies button {
+  flex: 0 0 auto; border: 1px solid rgb(0 0 0 / 0.12); background: #fff; border-radius: 999px;
+  padding: 6px 12px; font-size: 13px;
+}
+.quick-replies button:hover { background: #fffbe0; }
+
+/* 입력창 */
+.composer {
+  background: #fff; padding: 8px 10px; padding-bottom: max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid rgb(0 0 0 / 0.06); display: flex; flex-direction: column; gap: 6px;
+}
+.options { display: flex; justify-content: space-between; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.options > * { flex: 0 0 auto; }
+.modes { border: 0; margin: 0; padding: 0; display: flex; gap: 4px; }
+.modes label { position: relative; }
+.modes input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.modes span {
+  display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12.5px;
+  background: #f1f3f5; color: #55606b;
+}
+.modes input:checked + span { background: var(--accent); color: #fff; }
+.modes input:focus-visible + span { outline: 2px solid #1d6fd1; outline-offset: 2px; }
+.selects { display: flex; gap: 4px; }
+.selects select {
+  border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 3px 6px; font-size: 12.5px;
+}
+.location-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 12px; color: #2b6cb0; background: #f0f6fd; border-radius: 8px; padding: 4px 8px;
+}
+.location-bar[hidden] { display: none; }
+.text-btn { border: 0; background: transparent; color: #55606b; font-size: 12.5px; text-decoration: underline; padding: 2px 4px; }
+.input-row { display: flex; align-items: flex-end; gap: 6px; }
+.icon-btn {
+  flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%; border: 0; background: #f1f3f5;
+  display: grid; place-items: center; color: #6b7782;
+}
+.icon-btn svg { width: 20px; height: 20px; fill: currentColor; }
+.icon-btn[aria-pressed="true"] { background: #dbeafe; color: #1d6fd1; }
+#message {
+  flex: 1 1 auto; resize: none; border: 0; outline: 0; background: transparent;
+  font-size: 15px; line-height: 1.4; padding: 8px 4px; max-height: 120px; min-height: 36px;
+  word-break: keep-all; overflow-wrap: anywhere;
+}
+#message:focus-visible { outline: none; }
+.send {
+  flex: 0 0 auto; border: 0; border-radius: 8px; background: var(--me-bubble); color: var(--ink);
+  font-size: 14px; font-weight: 600; padding: 8px 14px; height: 36px;
+}
+.send:disabled { background: #f1f3f5; color: #a3acb5; }
+
+/* 지도: PC는 오른쪽 위 작은 지도(누르면 크게), 좁은 화면은 아래에서 올라오는 창 */
+.map-panel {
+  display: flex; flex-direction: column; background: #fff; min-width: 0;
+  border-radius: 18px; overflow: hidden; box-shadow: 0 8px 30px rgb(0 0 0 / 0.12);
+}
+.map-expand { display: none; }
+.map-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.map-head h2 { font-size: 15px; margin: 0; }
+#map { flex: 1 1 auto; min-height: 240px; }
+.map-note { margin: 0; padding: 6px 14px; font-size: 12px; color: #5c6b79; }
+.map-note.credit { padding-bottom: 10px; color: #8a949e; }
+/* 아래에서 올라오는 지도(1100px 미만)는 손가락으로 누르므로 '다시 표시'·'닫기'·'위치 해제'를 크게 한다. */
+@media (max-width: 1099px) {
+  .map-head .text-btn, #clear-location { min-height: 36px; padding: 8px 10px; }
+}
+.map-note a { color: inherit; }
+/* 아주 좁은 화면(360px 이하): 검색 방식과 종류·결과 수를 두 줄로 놓아 선택기가 잘리지 않게 한다. */
+@media (max-width: 360px) {
+  .options { flex-wrap: wrap; overflow: visible; row-gap: 6px; }
+  .selects { flex: 1 1 100%; justify-content: flex-end; }
+  .head-btn { padding: 6px; }
+  .room-title { gap: 8px; }
+}
+.close-map { display: none; }
+.map-backdrop { display: none; }
+@media (max-width: 1099px) {
+  .map-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 999; background: rgb(0 0 0 / 0.28);
+    opacity: 0; pointer-events: none; transition: opacity 0.25s ease;
+  }
+  body.sheet-open .map-backdrop { opacity: 1; pointer-events: auto; }
+  .map-panel {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 72dvh; z-index: 1000;
+    border-radius: 18px 18px 0 0; transform: translateY(105%); transition: transform 0.25s ease;
+    box-shadow: 0 -8px 30px rgb(0 0 0 / 0.25);
+  }
+  .map-panel.open { transform: translateY(0); }
+  .close-map { display: inline; }
+  .modes span { padding: 4px 8px; font-size: 12px; }
+  .selects select { padding: 3px 2px; font-size: 12px; }
+}
+@media (min-width: 700px) and (max-width: 1099px) {
+  /* 태블릿: 지도 창이 화면 전체가 아니라 휴대폰 모양 대화창 안에서 올라온다. */
+  .map-panel {
+    left: calc(50vw - var(--phone-w) / 2); right: auto; width: var(--phone-w);
+    bottom: calc((100dvh - var(--phone-h)) / 2); height: calc(var(--phone-h) * 0.72);
+    border-radius: 18px 18px 28px 28px;
+    /* 대화창 아래 여백만큼 더 내려야 닫힌 지도 윗부분이 화면 아래에 비치지 않는다. */
+    transform: translateY(calc(100% + 50dvh));
+  }
+}
+@media (min-width: 1100px) {
+  /* 지도를 크게 열면 대화창이 왼쪽으로 비켜서고, 지도가 대화창 오른쪽에 같은 높이로 펼쳐진다. */
+  :root {
+    --gap: 20px;
+    --map-w: min(760px, calc(100vw - var(--phone-w) - 80px));
+    --shift: calc((var(--gap) + var(--map-w)) / 2);
+  }
+  /* .app을 움직이면 그 안의 지도(position: fixed)까지 같이 밀리므로 대화창(.room)만 옮긴다. */
+  body.map-open .room {
+    transform: translateX(calc(-1 * var(--shift)));
+    transition: transform var(--dur-open) var(--ease-open);
+  }
+  .map-panel {
+    position: fixed; z-index: 900; left: calc(100vw - 320px); top: 20px; width: 300px; height: 220px;
+    will-change: left, top, width, height;
+    transition: left var(--dur-close) var(--ease-close), top var(--dur-close) var(--ease-close),
+      width var(--dur-close) var(--ease-close), height var(--dur-close) var(--ease-close),
+      border-radius var(--dur-close) var(--ease-close), box-shadow 0.25s ease, transform 0.25s ease;
+  }
+  /* 작은 지도에 마우스를 올리면 살짝 떠오르며 '크게 보기'가 또렷해진다 */
+  .map-panel:not(.expanded):hover { transform: translateY(-3px); box-shadow: 0 14px 36px rgb(0 0 0 / 0.2); }
+  .map-panel:not(.expanded) .map-expand span { opacity: 0.75; transition: opacity 0.2s ease, transform 0.2s ease; }
+  .map-panel:not(.expanded):hover .map-expand span { opacity: 1; transform: scale(1.05); }
+  .map-panel .map-head { padding: 7px 12px; transition: padding var(--dur-close) var(--ease-close); }
+  .map-panel .map-head h2 { font-size: 13px; transition: font-size var(--dur-close) var(--ease-close); }
+  .map-panel #map { min-height: 0; }
+  .map-panel:not(.expanded) .map-note,
+  .map-panel:not(.expanded) #map-retry { display: none; }
+  /* 작은 지도 위를 덮는 버튼: 누르면 크게 */
+  .map-panel:not(.expanded) .leaflet-control-zoom { display: none; }
+  /* 작은 지도는 폭이 좁아 지도 출처 중 필수인 OpenStreetMap만 남긴다 (크게 보면 전체 표시). */
+  .map-panel:not(.expanded) .leaflet-control-attribution a[href*="leafletjs.com"],
+  .map-panel:not(.expanded) .leaflet-control-attribution [aria-hidden="true"] { display: none; }
+  .map-panel:not(.expanded) .map-expand {
+    /* 왼쪽 아래: 오른쪽 아래의 지도 출처 문구, 위로 솟는 마커 핀과 겹치지 않는 자리 */
+    display: flex; align-items: flex-end; justify-content: flex-start; position: absolute; inset: 33px 0 0 0;
+    z-index: 1000; border: 0; padding: 8px; background: transparent; cursor: zoom-in;
+  }
+  .map-expand span {
+    background: rgb(25 25 25 / 0.72); color: #fff; font-size: 12px; padding: 4px 9px; border-radius: 999px;
+  }
+  .map-panel.expanded {
+    left: calc(50vw + var(--phone-w) / 2 - var(--shift) + var(--gap));
+    top: calc((100dvh - var(--phone-h)) / 2);
+    width: var(--map-w); height: var(--phone-h); border-radius: 28px;
+    box-shadow: 0 16px 48px rgb(0 0 0 / 0.16);
+    transition: left var(--dur-open) var(--ease-open), top var(--dur-open) var(--ease-open),
+      width var(--dur-open) var(--ease-open), height var(--dur-open) var(--ease-open),
+      border-radius var(--dur-open) var(--ease-open), box-shadow var(--dur-open) ease;
+  }
+  /* 펼친 뒤 안내 문구는 살짝 늦게 아래에서 떠오르며 나타난다 */
+  .map-panel.expanded .map-note,
+  .map-panel.expanded #map-retry,
+  .map-panel.expanded .close-map { animation: map-fade-up 0.35s 0.4s both ease-out; }
+  .map-panel.expanded .map-head { padding: 10px 16px; transition: padding var(--dur-open) var(--ease-open); }
+  .map-panel.expanded .map-head h2 { font-size: 15px; transition: font-size var(--dur-open) var(--ease-open); }
+  /* '작게 보기' 버튼 자리는 작은 지도에서도 비워 둬서, 펼칠 때 제목줄 높이가 갑자기 바뀌지 않게 한다. */
+  .map-panel .close-map { display: inline; visibility: hidden; }
+  .map-panel.expanded .close-map { visibility: visible; }
+}
+/* 크기를 잴 때는 애니메이션 없이 바로 바뀌게 */
+.map-panel.measuring, .map-panel.measuring * { transition: none !important; animation: none !important; }
+@keyframes map-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.map-pin { background: none; border: 0; }
+.map-pin .pin {
+  width: 28px; height: 28px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  background: var(--me-bubble); border: 2px solid var(--accent); display: grid; place-items: center;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.3);
+}
+.map-pin .pin b { transform: rotate(45deg); font-size: 12px; color: var(--accent); }
+.leaflet-popup-content p { margin: 4px 0 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-log { scroll-behavior: auto; }
+  .typing-bubble .dot { animation: none; }
+  .map-panel, .room { transition: none !important; }
+  .map-panel * { animation: none !important; }
+}

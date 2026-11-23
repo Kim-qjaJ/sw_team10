@@ -64,3 +64,43 @@ def test_other_places_for_one_group_skips_already_shown():
     assert [r["query"] for r in plan.requests] == ["카페"] and plan.same_query
     # '다른'이 없으면 같은 카페를 다시 보여줘도 된다.
     assert not plan_followup("카페도 보여줘", last_search()).same_query
+
+
+
+def test_near_card_uses_fixed_radius_and_rejects_missing_rank():
+    import asyncio
+    import time
+    from types import SimpleNamespace
+
+    from app.chat.followup_handler import handle_followup
+    from app.chat.session import SessionStore
+    from app.schemas.api import ChatRequest, RecommendResponse, RequestResult
+    from app.schemas.place import Place
+
+    seen = []
+
+    async def search(intent, limit, **options):
+        radius = options["radius_m"]
+        seen.append(radius)
+        places = [Place(name="가상 맛집", distance_m=2100)] if radius == 3000 else []
+        return RecommendResponse(
+            intent=intent, results=[RequestResult(request=intent.requests[0], places=places, providers={})],
+            timing_ms={}, mock_data=True,
+        )
+
+    sessions = SessionStore()
+    state = sessions.ensure("near-card")
+    state.last_search = last_search()
+    state.last_places = PLACES
+    ctx = SimpleNamespace(sessions=sessions, pipeline=SimpleNamespace(run=search))
+
+    def ask(message):
+        request = ChatRequest(message=message, mode="recommend", session_id="near-card")
+        return asyncio.run(handle_followup(ctx, request, plan_followup(message, state.last_search), state, time.perf_counter()))
+
+    response = ask("3번 근처 맛집")
+    assert seen == [1500] and response.radius_m == 1500 and not response.results[0].places
+    assert "1.5km" in response.notice
+    seen.clear()
+    response = ask("5번 근처 맛집")
+    assert not seen and "5번 장소가 없어요" in response.notice

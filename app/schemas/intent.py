@@ -25,6 +25,8 @@ class UserIntent(BaseModel):
     requests:list[PlaceRequest]=Field(default_factory=list)
     companion:Literal["alone","friend","family"]|None=None
     transport_mode:TransportMode|None=None
+    # '걸어서 5분 이내'의 5. transport_mode와 함께 결과를 거르는 이동 시간 상한(분). 후속 질문에도 이어진다.
+    max_travel_minutes:int|None=Field(default=None,ge=1,le=180)
     # intent="clarify"일 때 사용자에게 되물을 질문
     question:str|None=None
 

@@ -43,7 +43,16 @@ class Settings(BaseSettings):
     # - 요청 전체: LLM 해석·결과 요약을 포함해 이 시간 안에 결과 또는 안내를 돌려준다.
     # - LLM 해석: 이 시간을 넘기면 LLM을 기다리지 않고, 사전으로 확인된 조건이 있으면 기본 검색을 한다.
     request_timeout_seconds: float = 30.0
+    # /api/v1/status의 운영 진단 정보(최근 오류, 캐시, 전환 이유)는 이 값을 X-Status-Token 헤더로 보낸 요청에만 준다.
+    # 비워 두면 누구에게나 기본 상태(설정 여부)만 보여준다.
+    status_token: str | None = None
     llm_intent_timeout_seconds: float = 20.0
+    # 기본 LLM(Groq)만 기다리는 시간. 넘기면 남은 해석 시간(위 20초 안)에 로컬 LLM(Ollama)으로 넘긴다.
+    # Groq 자체 HTTP 제한(groq_timeout_seconds)이 20초보다 길어도 이 값이 먼저 적용된다.
+    llm_primary_timeout_seconds: float = 8.0
+    # 장소 응답 목표 시간: 검색이 늦어진 만큼 날씨·지하철역·TMAP 경로 조회를 줄여, Provider 하나가 늦어도
+    # 이 시간 안에 결과를 만든다 (SRS NFR-001 '일부 지연 시 6초').
+    response_deadline_seconds: float = 5.8
     # 주변 시설 찾기: 현재 위치가 부산 밖이면 검색하지 않고 기준 장소를 묻는다.
     # 부산 밖에서 개발/시연할 때는 false로 두면 현재 위치 그대로 검색한다.
     nearby_busan_only: bool = True
@@ -52,6 +61,17 @@ class Settings(BaseSettings):
     kakao_rest_api_key: str | None = None
     naver_client_id: str | None = None
     naver_client_secret: str | None = None
+
+    # TMAP 경로 거리. 키가 없으면 기존 직선거리 계산을 사용한다.
+    tmap_enabled: bool = True
+    tmap_api_key: str | None = None
+    # 대중교통 요약정보는 별도 상품 권한이 있는 키만 설정한다.
+    tmap_transit_api_key: str | None = None
+    tmap_timeout_seconds: float = 2.0
+    tmap_total_timeout_seconds: float = 4.0
+    tmap_max_routes: int = 40
+    tmap_concurrency: int = 4
+    tmap_cache_ttl_seconds: float = 300.0
 
     # 공공데이터포털 일반 인증키.
     # TourAPI와 기상청 API가 이 키를 공통으로 사용한다.

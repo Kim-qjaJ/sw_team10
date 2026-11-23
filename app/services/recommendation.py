@@ -1,8 +1,9 @@
 """후보 장소에 점수를 매겨 순위를 정한다.
 
 100점 구조: 종류 30 + 접근성 25 + 사용자 조건 15 + 날씨 10 + 교차정보 10 + 부산 특화 10.
-데이터가 없는 항목은 제외하고 남은 항목의 가중치로 100점 만점 환산한다(score).
-순위(rank_score)는 데이터 신뢰도(data_confidence)를 반영해 정보가 적은 장소를 약간 낮춘다.
+데이터가 없는 항목은 제외하고 남은 항목의 가중치로 100점 만점 환산한다(base_score).
+환산 덕분에 정보가 적은 장소가 위로 오르지 않도록 데이터 신뢰도(data_confidence)로 약간 낮춘 값이 최종 추천 점수(score)다.
+화면에 보이는 '추천 점수'와 순위 기준은 같은 score다 (rank_score는 예전 이름으로 score와 같은 값).
 점수 계산이 실패하면 기본 순위(인기 신호 → 거리 → 입력 순서)로 상위 N개를 돌려준다.
 """
 
@@ -51,7 +52,7 @@ class RecommendationService:
         if anchor is not None and sort_by_distance:
             ranked.sort(key=lambda p: p.distance_m if p.distance_m is not None else float("inf"))
         else:
-            ranked.sort(key=lambda p: (p.rank_score, p.data_confidence), reverse=True)
+            ranked.sort(key=lambda p: (p.score, p.data_confidence), reverse=True)
         return ranked[:limit]
 
     @staticmethod
@@ -61,9 +62,13 @@ class RecommendationService:
         for original in places:
             place = original.model_copy(deep=True)
             if anchor is not None and place.latitude is not None and place.longitude is not None:
-                place.distance_m = round(haversine_m(anchor[0], anchor[1], place.latitude, place.longitude), 1)
-                if place.distance_m > radius:
+                straight = round(haversine_m(anchor[0], anchor[1], place.latitude, place.longitude), 1)
+                place.straight_distance_m = straight
+                # 반경은 지리적 검색 범위다. 도로가 돌아가더라도 검색 후보에서 지우지 않는다.
+                if straight > radius:
                     continue
+                place.distance_m = place.route_distance_m if place.route_distance_m is not None else straight
+                place.distance_source = "tmap" if place.route_distance_m is not None else "straight"
             kept.append(place)
         return kept
 
@@ -83,8 +88,16 @@ class RecommendationService:
         for original in places:
             place = original.model_copy(deep=True)
             has_xy = place.latitude is not None and place.longitude is not None
-            if anchor is not None:
-                dist = place.distance_m
+            route_distance = place.route_distance_m if place.route_mode == (intent.transport_mode or "walk") else None
+            if route_distance is not None and (anchor is not None or score_anchor is not None):
+                dist = route_distance
+                place.distance_m = route_distance
+                place.distance_source = "tmap"
+            elif anchor is not None:
+                # 다른 이동수단으로 조회한 경로가 남아 있으면 그 값을 재사용하지 않는다.
+                dist = place.straight_distance_m if place.route_distance_m is not None else place.distance_m
+                place.distance_m = dist
+                place.distance_source = "straight"
             elif score_anchor is not None and has_xy:
                 dist = haversine_m(score_anchor[0], score_anchor[1], place.latitude, place.longitude)
             else:
@@ -100,6 +113,7 @@ class RecommendationService:
                 "access": access_score(
                     intent.transport_mode, dist, scale, place.latitude, place.longitude, stations,
                     {"walk": place.walking_minutes, "transit": place.transit_minutes, "car": place.driving_minutes},
+                    route_distance_m=route_distance if anchor is not None or score_anchor is not None else None,
                 ),
                 "condition": condition_score(intent.companion, request.indoor, indoor, path, place.category),
                 "weather": weather_score(indoor, weather, inferred),
@@ -117,10 +131,11 @@ class RecommendationService:
                 used += weight
                 place.score_breakdown[key] = {"score": round(value * weight, 1), "max": weight,
                                               "reason": reason, "available": True}
-            place.score = round(total / used * 100, 1) if used else 0.0
+            place.base_score = round(total / used * 100, 1) if used else 0.0
             place.data_confidence = round(used / sum(weights.values()), 2)
-            # 정보가 적은 장소가 환산 덕분에 위로 오르지 않도록 순위에는 신뢰도를 반영한다.
-            place.rank_score = round(place.score * (0.8 + 0.2 * place.data_confidence), 1)
+            # 정보가 적은 장소가 환산 덕분에 위로 오르지 않도록 신뢰도를 반영한 값을 최종 점수로 쓴다.
+            # (화면 점수와 순위가 어긋나지 않게 표시·정렬 모두 이 값을 쓴다)
+            place.score = place.rank_score = round(place.base_score * (0.8 + 0.2 * place.data_confidence), 1)
             scored.append(place)
         return scored
 
@@ -128,7 +143,7 @@ class RecommendationService:
     def _fallback(places: list[Place]) -> list[Place]:
         """기본 순위: 인기 신호가 높은 순 → 가까운 순 → 입력(Provider) 순서. 점수는 비워 둔다."""
         for place in places:
-            place.score = place.rank_score = place.data_confidence = 0.0
+            place.score = place.rank_score = place.base_score = place.data_confidence = 0.0
             place.score_breakdown = {"fallback": {"score": 0.0, "max": 0, "reason": FALLBACK_REASON, "available": False}}
         return sorted(places, key=lambda p: (
             -(p.popularity_signal if p.popularity_signal is not None else -1.0),

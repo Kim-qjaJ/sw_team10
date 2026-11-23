@@ -197,29 +197,65 @@ def _asks_new_search(message: str) -> bool:
     if re.search(r"\d번|번째", text):
         return False
     text = re.sub(r"그\s?(가게|카페|식당)", "", text)
+    # 축제·행사·공연은 장소 종류 사전에 없어도 새로 찾는 말이다.
+    if re.search(r"축제|페스티벌|행사|공연|전시", text):
+        return True
     return any(_strip_particles(token, CATEGORIES) for token in re.findall(r"[0-9a-z가-힣]+", text))
+
+
+def missing_rank_reply(message: str, places: list[dict]) -> str | None:
+    """'2번 길찾기'처럼 직전 결과에 없는 번호를 가리키면 다른 장소로 바꾸지 않고 안내한다."""
+    rank = _requested_rank(_normalize(message))
+    if rank is None or not places or select_recent_places(message, places):
+        return None
+    count = len(places)
+    shown = "1번만 있어요" if count == 1 else f"1번부터 {count}번까지 있어요"
+    return f"직전 결과에는 {rank}번 장소가 없어요. 결과는 {shown}. 번호를 다시 골라 주세요."
 
 
 def format_place_fields(message: str, places: list[dict]) -> str | None:
     """주소/전화/URL 요청은 LLM 없이 직전 결과에서 바로 답한다."""
     fields = requested_place_fields(message)
     selected = select_recent_places(message, places)
+    if fields and not selected and not _asks_new_search(message):
+        missing = missing_rank_reply(message, places)
+        if missing is not None:
+            return missing
     if not fields or not selected:
         return None
     if _asks_new_search(message):
         return None
+    # '부산 전체 축제 알려줘'처럼 '알려줘'만 있고 번호·장소 이름도, 주소·전화 같은 항목도 없으면 상세 질문이 아니다.
+    text = _normalize(message)
+    explicit_field = any(word in text for word in ("주소", "위치", "전화", "연락처", "url", "링크", "홈페이지", "사이트", "정보", "상세"))
+    points_at = _requested_rank(text) is not None or any(
+        place.get("name") and place["name"].lower() in text for place in places)
+    if not explicit_field and not points_at:
+        return None
 
-    labels = {"address": "주소", "phone": "전화번호", "url": "URL"}
     blocks: list[str] = []
     for place in selected:
-        values = []
-        for field_name in ("address", "phone", "url"):
-            if field_name not in fields:
-                continue
-            value = place.get(field_name)
-            values.append(f"{labels[field_name]}: {value}" if value else f"{labels[field_name]}: 확인되지 않음")
-        blocks.append(f"{place.get('rank', '?')}번 {place.get('name', '장소')} - " + ", ".join(values))
-    return "\n".join(blocks)
+        lines = [f"{place.get('rank', '?')}번 {place.get('name', '장소')}"]
+        if "address" in fields:
+            lines.append(f"주소: {place.get('address') or '정보 없음'}")
+        if "phone" in fields:
+            lines.append(f"전화: {place.get('phone') or '정보 없음'}")
+        if "url" in fields:
+            # 링크는 화면의 '바로가기' 버튼으로 준다 (place_links).
+            lines.append("장소 정보: 아래 버튼으로 볼 수 있어요" if place.get("url") else "장소 정보 링크: 없음")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def place_links(message: str, places: list[dict]) -> list[dict]:
+    """상세 정보 답변에 붙일 장소 정보 링크 버튼."""
+    if "url" not in requested_place_fields(message):
+        return []
+    return [
+        {"label": f"{place.get('rank', '?')}번 {place.get('name', '장소')} 정보", "url": place["url"]}
+        for place in select_recent_places(message, places)
+        if isinstance(place.get("url"), str) and place["url"].startswith(("http://", "https://"))
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +264,7 @@ def format_place_fields(message: str, places: list[dict]) -> str | None:
 
 RouteKind = Literal["direct", "clarify", "compare", "unsupported", "llm"]
 
+LODGING_PATTERN = re.compile(r"숙소|숙박|호텔|모텔|게스트\s?하우스|펜션|리조트|에어비앤비")
 COMPARE_PATTERN = re.compile(r"(그|이|저|셋|넷|다섯|위|두 곳|세 곳)\s?중|중에서|중에|비교|어디가 더|어느 곳이|어느 게")
 LOCATION_EXAMPLES = "예: 서면, 해운대, 덕천, 부산역 근처"
 
@@ -411,7 +448,8 @@ def _classify(token: str, parsed: _Parsed) -> None:
 
 
 # '3개만', '세 곳', '다섯 군데 정도' 같은 개수 표현
-COUNT_PATTERN = re.compile(r"(\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(개|곳|군데)(만|정도|쯤|씩)?")
+# 개수 말은 앞이 띄어쓰기·문장 처음일 때만 읽는다. '조용한 곳', '갈 만한 곳'의 '한 곳'은 개수가 아니다.
+COUNT_PATTERN = re.compile(r"(?<![0-9가-힣])(\d+|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(개|곳|군데)(만|정도|쯤|씩)?")
 _COUNT_WORDS = {"한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8, "아홉": 9, "열": 10}
 
 
@@ -448,11 +486,26 @@ _SPACED_POINTS = sorted(
 )
 
 
+_NEAR_SPACED_POINT = re.compile(
+    rf"([가-힣]{{2,}})\s+({'|'.join(sorted(POINT_SUFFIXES, key=len, reverse=True))})(?=\s*(?:근처|주변|부근|앞|옆|쪽))"
+)
+
+
 def _join_spaced_points(text: str) -> str:
     for spaced, joined in _SPACED_POINTS:
         if spaced in text:
             text = re.sub(rf"{re.escape(spaced[: spaced.rindex(' ')])}\s+{re.escape(spaced[spaced.rindex(' ') + 1:])}", joined, text)
-    return text
+
+    # 사전에 없는 지점도 '송도 해수욕장 근처'처럼 '알려진 지역 + 해수욕장·역·공원 + 근처'면 한 지점으로 읽는다.
+    # 띄어 쓴 채로 두면 '해수욕장'이 찾을 장소 종류가 되어 '해수욕장 + 횟집' 두 검색으로 나뉜다.
+    registry = get_region_registry()
+
+    def join(match: re.Match) -> str:
+        word = match.group(1)
+        known = word in registry.names or word in registry.lifestyle_names
+        return word + match.group(2) if known else match.group(0)
+
+    return _NEAR_SPACED_POINT.sub(join, text)
 
 
 def _parse(message: str) -> _Parsed:
@@ -469,6 +522,19 @@ def _parse(message: str) -> _Parsed:
     if parsed.reference or any(word in text for word in ("아까", "나머지")):
         parsed.followup = True
     return parsed
+
+
+def _only_location_words(text: str, parsed: _Parsed) -> bool:
+    """문장이 지역 이름(과 조사)만으로 이뤄졌는지. '서면 갈만한 곳'처럼 다른 말이 있으면 False."""
+    names = {name.lower() for name in (*parsed.locations, *parsed.areas, *parsed.districts, *parsed.points)}
+    tokens = re.findall(r"[0-9a-z가-힣]+", _join_spaced_points(text.lower()))
+    if not tokens or not names:
+        return False
+    for token in tokens:
+        stem = re.sub(r"(에서|으로|로|은|는|이|가|요|쪽)$", "", token)
+        if token not in names and stem not in names:
+            return False
+    return True
 
 
 def _eul(word: str) -> str:
@@ -612,12 +678,31 @@ def route_place_query(
             )
 
     # 재질문에 대한 답: '카페 추천해줘' → (어느 지역?) → '서면'
-    if pending_intent is not None and location and not requests and not parsed.brands and not parsed.unknown:
+    if pending_intent is not None and pending_intent.requests and location and not requests \
+            and not parsed.brands and not parsed.unknown:
         data = pending_intent.model_dump()
         data["location"] = location
         data["companion"] = parsed.companion or data.get("companion")
         data["transport_mode"] = parsed.transport_mode or data.get("transport_mode")
         return PlaceRoute("direct", intent=UserIntent.model_validate(data), reason="재질문 답변(위치)")
+
+    # 재질문에 대한 답: '광안리' → (어떤 곳?) → '카페'
+    if pending_intent is not None and pending_intent.location and not pending_intent.requests and requests and not location:
+        data = pending_intent.model_dump()
+        data["intent"] = "recommend_place"
+        data["requests"] = requests
+        data["companion"] = parsed.companion or data.get("companion")
+        data["transport_mode"] = parsed.transport_mode or data.get("transport_mode")
+        return PlaceRoute("direct", intent=UserIntent.model_validate(data), reason="재질문 답변(장소 종류)")
+
+    # 숙소는 추천 대상이 아니다 ('사상 터미널 근처 숙소'). '호텔 근처 맛집'처럼 다른 종류를 찾으면 그대로 둔다.
+    if not requests and LODGING_PATTERN.search(text):
+        return PlaceRoute(
+            "unsupported",
+            intent=UserIntent(intent="unsupported", location=location),
+            message="숙소(호텔·모텔 등)는 이 서비스에서 찾아 드리지 않아요. 근처 맛집·카페·관광지는 찾아 드릴 수 있어요.",
+            reason="숙소 요청",
+        )
 
     # 3) 사전에 없는 표현이 섞이면 LLM이 해석한다.
     if parsed.unknown:
@@ -663,6 +748,18 @@ def route_place_query(
             "clarify",
             message=f"어느 지역에서 어떤 장소를 찾을지 알려주세요. 예: '서면 카페 추천해줘', '해운대 맛집 알려줘'",
             reason="위치·장소 종류 없음",
+        )
+
+    # 8-1) 지역 이름만 말한 경우('광안리') → 어떤 곳을 찾을지 묻는다. 답하면 이 위치로 바로 검색한다.
+    if location and not requests and _only_location_words(text, parsed):
+        place = location.removeprefix("부산 ").strip() or location
+        return PlaceRoute(
+            "clarify",
+            # 장소 종류가 아직 없으므로 위치만 기억해 둔다. 답으로 종류를 말하면 이 위치로 검색한다.
+            intent=UserIntent(intent="clarify", location=location, companion=parsed.companion,
+                              transport_mode=parsed.transport_mode),
+            message=f"{place}에서 어떤 곳을 찾을까요? 맛집, 카페, 관광지처럼 알려주세요.",
+            reason="장소 종류 없음",
         )
 
     # 9) 위치만 있고 장소 종류가 없는 경우('서면 갈만한 곳') 등은 LLM이 판단한다.
@@ -724,6 +821,8 @@ def split_query(message: str, previous_location: str | None = None, pending_loca
     text = re.sub(r"북\s+카페", "북카페", text)
     text = re.sub(r"스터디\s+카페", "스터디카페", text)
     preferred = _parse(text).prefer_region_words
+    # '대항항 근처 약국'처럼 '근처·주변·부근' 바로 앞의 사전에 없는 말은 가게 이름이 아니라 기준 장소다.
+    near_words = {w for w in re.findall(r"([0-9A-Za-z가-힣]+?)\s*(?:근처|주변|부근)", text)}
     for raw in re.findall(r"[0-9A-Za-z가-힣]+", text):
         token = raw.lower()
         parsed = _Parsed()
@@ -745,6 +844,8 @@ def split_query(message: str, previous_location: str | None = None, pending_loca
         elif parsed.districts or parsed.areas:
             locations.extend((name, "district") for name in parsed.districts)
             locations.extend((name, "area") for name in parsed.areas if name != "부산")
+        elif parsed.unknown and (raw in near_words or re.sub(r"근처|주변|부근", "", raw) in near_words):
+            locations.append((re.sub(r"근처|주변|부근", "", raw), "near_point"))
         elif parsed.unknown:
             keyword_parts.append(_strip_keyword_particle(raw))
         # 그 밖의 요청 어미, '근처', 동행/교통 표현 등은 검색어에서 뺀다.
@@ -763,6 +864,13 @@ def split_query(message: str, previous_location: str | None = None, pending_loca
         return KeywordQuery(location=" ".join(name for name, _ in locations), keyword=keyword, category=category, question=match.question)
     if match.region and (len(names) > 1 or registry.match_names([name for name, _ in locations]).candidates):
         location = match.region.qualified_name
+        locations = []
+    near_points = [name for name, kind in locations if kind == "near_point"]
+    if near_points:
+        # 사전에 없는 기준 장소는 앞에 쓴 동네 이름과 함께 찾는다: '가덕도 대항항 근처' → 위치 '가덕도 대항항 근처'.
+        areas = [name for name, kind in locations if kind in {"area", "district"} and name != "부산"]
+        location = " ".join([*areas, near_points[0]]) + " 근처"
+        keyword_parts.extend(near_points[1:])
         locations = []
     if locations:
         # 기준 위치는 하나만 쓰고, 나머지 지명은 검색어에 남겨 둔다.
@@ -822,6 +930,10 @@ def format_route(
     selected = select_recent_places(message, places)
     if len(selected) > 3:
         selected = selected[:3]
+    missing = missing_rank_reply(message, places)
+    if missing is not None:
+        # 없는 번호를 말했는데 1번 링크를 주면 엉뚱한 곳으로 안내하게 된다 (2026-11-23 검토).
+        return missing, []
     if not selected:
         # 번호를 말하지 않으면 1번 장소로 안내한다.
         selected = places[:1]

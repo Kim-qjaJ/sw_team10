@@ -1,4 +1,5 @@
 """실행: .venv/bin/python frontend-tests/smoke.py (8000 포트 Mock 서버 필요).
+대상: 예전 검색 화면(/classic). 기본 화면(/)은 메신저형 화면(chat.html)으로 바뀌어 요소 ID가 다르다.
 실제 API 연결 + 오류 주입 브라우저 테스트. OSM 타일 요청은 차단해 서비스에 부하를 주지 않습니다.
 테스트용 응답/위치는 이 파일에만 존재하며 운영 화면에 포함되지 않습니다.
 """
@@ -8,6 +9,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
 BASE='http://127.0.0.1:8000'
+PAGE=BASE+'/classic'
 API='**/api/v1/recommend'
 PNG=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=')
 
@@ -23,7 +25,7 @@ with sync_playwright() as pw:
     page=context.new_page()
     errors=[]
     page.on('pageerror',lambda e:errors.append(str(e)))
-    page.goto(BASE)
+    page.goto(PAGE)
     expect(page.locator('#map-status')).to_contain_text('불러오지 못했어요')
     submit(page,'   ')
     expect(page.locator('#error')).to_be_visible()
@@ -138,7 +140,7 @@ with sync_playwright() as pw:
     page.close()
     no_map=context.new_page()
     no_map.route('**/vendor/leaflet/leaflet.js',lambda route:route.abort())
-    no_map.goto(BASE)
+    no_map.goto(PAGE)
     expect(no_map.locator('#map-status')).to_contain_text('지도 프로그램')
     no_map.locator('#category').select_option('cafe')
     with no_map.expect_request(API) as req: submit(no_map,'서면 카페 추천해줘')

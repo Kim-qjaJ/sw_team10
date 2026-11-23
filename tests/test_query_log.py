@@ -54,6 +54,12 @@ class QueryLoggerTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("35.15", dumped)
         self.assertFalse({"session_id", "session_hash", "latitude", "longitude"} & record.keys())
 
+    async def test_coordinates_typed_in_message_are_masked(self):
+        request = ChatRequest(message="35.1578, 129.0597 근처 카페 2곳")
+        record = QueryLogger.build(request, sample_response())
+        self.assertEqual(record["message"], "[좌표], [좌표] 근처 카페 2곳")
+        self.assertEqual(set(record), {"message", "route", "mode", "intent", "unknown_terms", "result_count"})
+
     async def test_insert_sends_secret_key_header(self):
         calls, client = recorder()
         db = SupabaseClient(client, "https://example.supabase.co/", "sb_secret_test")

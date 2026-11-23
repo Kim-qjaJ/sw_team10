@@ -31,3 +31,7 @@ class LocationReference(BaseModel):
     question: str | None = None
     # 생활권 반경(m) 또는 행정구역 크기(같은 면적의 원 반지름). 거리 점수 스케일에 쓴다.
     radius_m: int | None = None
+    # 사용자가 적은 기준 장소를 찾지 못해 더 넓은 지역으로 바꿔 찾았을 때, 찾지 못한 말 ('대항항')
+    widened_from: str | None = None
+    # 찾지 못했을 때 카카오가 대신 돌려준 비슷한 이름 (안내 문구에 후보로 보여준다)
+    similar_name: str | None = None

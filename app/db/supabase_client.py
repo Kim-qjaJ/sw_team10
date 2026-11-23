@@ -10,6 +10,8 @@ import logging
 
 import httpx
 
+from app.services.safe_error import redact
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,6 +72,7 @@ class SupabaseClient:
 
     def _fail(self, message: str) -> None:
         self.failed += 1
+        message = redact(message)
         self.last_error = message
         logger.warning("Supabase 요청 실패: %s", message)
 

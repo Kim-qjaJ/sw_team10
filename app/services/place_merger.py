@@ -34,7 +34,7 @@ _DIGITS = str.maketrans("0123456789", "영일이삼사오육칠팔구")
 # 출처 정보는 따로 합치고, 점수 필드는 병합 뒤 추천 단계에서 채운다.
 _SKIP_FILL = {
     "id", "name", "latitude", "longitude", "sources", "source_ids", "source_categories", "source_category_codes",
-    "popularity_signal", "busan_verified", "events", "score", "rank_score", "data_confidence", "score_breakdown",
+    "popularity_signal", "busan_verified", "events", "score", "base_score", "rank_score", "data_confidence", "score_breakdown",
 }
 
 

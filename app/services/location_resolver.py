@@ -13,6 +13,8 @@ from app.services.region_registry import LifestyleArea, get_region_registry
 _ADMIN_SUFFIX = ("구", "군", "동", "읍", "면", "리")
 _POINT_HINTS = ("역", "해수욕장", "해변", "대교", "공원", "시장", "백화점", "대학교", "대학", "학교", "병원", "시청", "구청", "터미널", "공항", "박물관", "미술관", "도서관")
 _AREA_NAMES = {"덕천", "구포", "전포", "남포동", "송정", "기장"}
+# 위치처럼 보여도 장소 이름이 아닌 말 (카카오에서 찾으면 엉뚱한 가게가 나온다)
+_NOT_PLACE = {"전체", "전역", "일대", "시내", "어디", "아무데나", "근처", "주변", "부근", "여기", "거기", "현재", "위치"}
 
 
 def _clean_location(text: str) -> str:
@@ -56,12 +58,40 @@ class LocationResolver:
                 region_code=region.code, region_level=region.level, coordinate_accuracy=region.accuracy,
                 boundary_scope=registry.boundary_codes(region)[1], radius_m=region.radius_m or None,
             )
-        if text.endswith(_ADMIN_SUFFIX) or text in _AREA_NAMES or not any(hint in text for hint in _POINT_HINTS):
+        core = re.sub(r"\s*(근처|주변|부근)$", "", text).strip()
+        words = [w for w in core.split() if w not in registry.names and w not in registry.lifestyle_names]
+        if not core or text.endswith(_ADMIN_SUFFIX) or text in _AREA_NAMES or any(w in _NOT_PLACE for w in core.split()):
             return LocationReference(mode="area_anchor", original_text=raw, resolved_name=raw, source="text")
-        found = await self._kakao_lookup(text)
+        # 사전에 없는 지명('대항항', '가덕도 대항항')은 카카오에서 실제 위치를 찾는다. 예전에는 역·공원 같은 말이
+        # 붙었을 때만 찾아서, 작은 항구·마을 이름은 좌표 없이 글자로만 검색돼 결과가 없었다 (2026-11-23).
+        found = await self._kakao_lookup(core)
+        similar = None
+        if found is not None and found.mode == "specific_place":
+            name = re.sub(r"\s+", "", found.resolved_name or "")
+            # 찾은 곳 이름에 사전에 없던 말이 들어 있어야 같은 장소로 본다. 아니면 후보로만 알려 준다.
+            if not words or any(w in name for w in words) or any(hint in core for hint in _POINT_HINTS):
+                return found.model_copy(update={"original_text": raw})
+            similar = found.resolved_name
         if found is None:
-            return LocationReference(mode="unresolved", original_text=raw)
-        return found.model_copy(update={"original_text": raw})
+            # 카카오 키가 없거나 호출이 실패하면 예전처럼 글자로만 찾는다.
+            if any(hint in text for hint in _POINT_HINTS):
+                return LocationReference(mode="unresolved", original_text=raw)
+            return LocationReference(mode="area_anchor", original_text=raw, resolved_name=raw, source="text")
+        missing = " ".join(words) or core
+        # '가덕도 대항항'처럼 아는 동네 이름이 같이 있으면 그 동네 전체로 넓혀 찾고, 넓혔다는 사실을 남긴다.
+        area_text = " ".join(w for w in core.split() if w not in words)
+        if area_text:
+            wide = registry.resolve(area_text)
+            if wide.region and not wide.candidates:
+                region = wide.region
+                return LocationReference(
+                    mode="area_anchor", original_text=raw, resolved_name=region.qualified_name,
+                    latitude=region.latitude, longitude=region.longitude, source="region_dictionary",
+                    region_code=region.code, region_level=region.level, coordinate_accuracy=region.accuracy,
+                    boundary_scope=registry.boundary_codes(region)[1], radius_m=region.radius_m or None,
+                    widened_from=missing, similar_name=similar,
+                )
+        return LocationReference(mode="not_found", original_text=raw, resolved_name=missing, similar_name=similar)
 
     async def _resolve_lifestyle(self, raw: str, area: LifestyleArea) -> LocationReference:
         """생활권: 기준 시설 좌표(카카오) → 실패하면 대표 행정구역 중심(근사)."""

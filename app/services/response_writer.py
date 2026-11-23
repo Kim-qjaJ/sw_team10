@@ -1,4 +1,5 @@
 import json
+import re
 import time
 
 import httpx
@@ -8,6 +9,23 @@ from app.schemas.api import RequestResult
 from app.schemas.intent import UserIntent
 from app.services.local_router import HELP_REPLY, route_local_reply
 
+_KOREAN_NUMBERS = {"한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7, "여덟": 8, "아홉": 9, "열": 10}
+_COUNT = re.compile(r"(\d{1,3}|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(곳|군데|개(?!월))")
+# '카페 드림'처럼 따옴표로 묶은 이름: 짧은 대화 답에 데이터에 없는 장소 이름을 지어낸 흔적
+_QUOTED_NAME = re.compile(r"[‘'\"“「][^’'\"”」]{2,30}[’'\"”」]")
+
+
+def counts_match(text: str, results: list[RequestResult]) -> bool:
+    """요약에 적힌 'N곳'이 실제 결과 수(묶음별 또는 전체)와 맞는지. 숫자가 없으면 맞는 것으로 본다."""
+    counts = [len(result.places) for result in results if result.places]
+    allowed = set(counts) | {sum(counts)}
+    for number, _ in _COUNT.findall(text or ""):
+        value = int(number) if number.isdigit() else _KOREAN_NUMBERS[number]
+        if value not in allowed:
+            return False
+    return True
+
+
 SYSTEM_PROMPT = """너는 부산 장소 추천 서비스 SW_team10의 짧은 응답 작성기다.
 백엔드가 이미 검색하고 순위를 계산한 결과만 사용한다.
 장소 정보, 분위기, 가격, 리뷰, 영업시간 등 제공되지 않은 사실을 추측하지 않는다.
@@ -15,6 +33,8 @@ SYSTEM_PROMPT = """너는 부산 장소 추천 서비스 SW_team10의 짧은 응
 순위, 주소, 전화번호, URL, 점수는 화면 카드에 따로 표시되므로 답변에서 장소 목록이나 상세정보를 반복하지 않는다.\n결과가 여러 개여도 장소명을 줄줄이 나열하지 말고, 검색 조건과 찾은 결과 개수 정도만 짧게 요약한다.
 과장하거나 특정 장소를 임의로 더 추천하지 않는다.
 날씨는 언급하지 않는다. 순위에 반영된 날씨 문장은 백엔드가 따로 덧붙인다.
+말투는 친근한 해요체로 쓴다. '~찾으셨군요', '~되었습니다' 같은 말 대신 바로 결과를 말한다. 예: '서면에서 조용한 카페 5곳을 찾았어요.'
+점수는 '추천 점수'라고 부르고 '평점'이라고 하지 않는다 (사용자 별점이 아니다).
 설명만 일반 텍스트로 반환한다."""
 
 # 맑은 날 날씨를 언급할 만한 요청: 야외 장소가 결과에 섞이는 종류
@@ -99,7 +119,8 @@ class ResponseWriter:
                                 "너는 부산 장소 추천 서비스 SW_team10의 챗봇이다. "
                                 "인사, 감사, 작별, 서비스 사용법 같은 짧은 대화에 친근한 한국어로 답한다. 반드시 1~2문장 안에서 답변을 끝낸다. "
                                 "부산의 맛집, 카페, 관광지, 놀거리 등을 찾을 수 있다는 서비스 범위 안에서 답하고 "
-                                "확인되지 않은 장소 정보는 만들지 않는다."
+                                "확인되지 않은 장소 정보는 만들지 않는다. "
+                                "날씨·시간·뉴스 같은 실시간 정보는 알 수 없으므로 지어내지 않는다. 말투는 해요체로 쓴다."
                             ),
                         },
                         {"role": "user", "content": user_message},
@@ -114,6 +135,9 @@ class ResponseWriter:
             if not choices:
                 return fallback, round((time.perf_counter() - started) * 1000, 2)
             reply = choices[0].get("message", {}).get("content", "").strip()
+            if _QUOTED_NAME.search(reply):
+                # 짧은 대화 답에는 장소 이름이 나올 일이 없다. 지어낸 장소일 수 있어 템플릿으로 바꾼다 (AI-REQ-01).
+                reply = ""
             return reply or fallback, round((time.perf_counter() - started) * 1000, 2)
         except (httpx.HTTPError, ValueError):
             return fallback, round((time.perf_counter() - started) * 1000, 2)
@@ -155,7 +179,7 @@ class ResponseWriter:
                                 "너는 SW_team10의 장소 상세질문 응답기다. 직전 추천 결과의 제공된 데이터만 사용한다. "
                                 "질문의 대상 장소를 이름, 번호(1번/첫 번째 등), 문맥으로 찾아 답한다. "
                                 "메뉴, 영업시간, 리뷰 등 데이터에 없는 사실은 절대 추측하지 말고 현재 데이터로는 확인할 수 없다고 말한다. "
-                                "반드시 한국어 1~2문장으로 답한다."
+                                "반드시 한국어 해요체 1~2문장으로 답한다. 점수는 '추천 점수'라고 부르고 '평점'이라고 하지 않는다."
                             ),
                         },
                         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -199,6 +223,8 @@ class ResponseWriter:
                     }
                     for place in result.places[:5]
                 ],
+                # 장소 목록은 앞 5곳만 보내므로, 실제로 보여주는 개수를 따로 알려준다.
+                "shown_count": len(result.places),
             }
             for result in results
         ]
@@ -235,6 +261,9 @@ class ResponseWriter:
             if not choices:
                 return None, round((time.perf_counter() - started) * 1000, 2)
             text = choices[0].get("message", {}).get("content", "").strip()
+            if text and not counts_match(text, results):
+                # 예전에는 19곳을 보여주면서 '5곳을 찾았어요'라고 요약했다. 숫자가 틀리면 템플릿 문장을 쓴다.
+                text = ""
             return text or None, round((time.perf_counter() - started) * 1000, 2)
         except (httpx.HTTPError, ValueError):
             # 자연어 설명 실패가 추천 전체를 실패시키지는 않는다.
@@ -305,7 +334,8 @@ class ResponseWriter:
                                 "새 조건에 맞는 곳을 묻는다. 제공된 장소 목록 안에서만 고르고, 새 장소를 만들지 않는다. "
                                 "좌석 수, 분위기, 가격, 리뷰처럼 데이터에 없는 사실은 추측하지 말고 "
                                 "'현재 데이터로는 확인할 수 없다'고 밝힌 뒤, 거리·카테고리·실내 여부 등 있는 정보로만 판단한다. "
-                                "답변은 한국어 2~3문장이며 장소는 '번호 + 이름'으로 언급한다."
+                                "답변은 한국어 해요체 2~3문장이며 장소는 '번호 + 이름'으로 언급한다. "
+                                "score는 서비스가 계산한 '추천 점수'이므로 '평점'이라고 부르지 않는다."
                             ),
                         },
                         {

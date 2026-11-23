@@ -15,9 +15,18 @@ class Place(BaseModel):
     url: str | None = None
     # 대표 사진 주소 (TourAPI firstimage). url은 장소 정보 페이지 링크로만 쓴다.
     image_url: str | None = None
+    # 정기 휴관일 문장(TourAPI 쉬는 날)과 오늘 정기 휴관인지. 알 수 없으면 None (임시 휴관은 반영하지 못함)
+    rest_info: str | None = None
+    closed_today: bool | None = None
     latitude: float | None = None
     longitude: float | None = None
     distance_m: float | None = None
+    # 검색 반경은 직선거리, 접근성 점수와 표시 거리는 TMAP 경로를 우선한다.
+    straight_distance_m: float | None = None
+    route_distance_m: float | None = None
+    route_duration_minutes: float | None = None
+    route_mode: Literal["walk", "transit", "car"] | None = None
+    distance_source: Literal["straight", "tmap"] | None = None
     indoor: bool | None = None
 
     sources: list[str] = Field(default_factory=list)
@@ -35,11 +44,15 @@ class Place(BaseModel):
     events: list[dict] = Field(default_factory=list)
 
     walking_minutes: float | None = None
+    # 이동 시간 상한('걸어서 5분')을 판단할 때 경로 시간이 없어 직선거리로 추정한 분
+    estimated_travel_minutes: float | None = None
     transit_minutes: float | None = None
     driving_minutes: float | None = None
     transit_transfers: int | None = None
 
+    # score: 최종 추천 점수(순위 기준이자 화면 표시 값). base_score: 확인한 항목만으로 100점 환산한 값.
     score: float = 0.0
+    base_score: float = 0.0
     rank_score: float = 0.0
     data_confidence: float = 0.0
     score_breakdown: dict[str, dict] = Field(default_factory=dict)
