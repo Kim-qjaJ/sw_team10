@@ -193,7 +193,7 @@ class BusanProviderTest(unittest.IsolatedAsyncioTestCase):
         museum = by_name["부산시립미술관"]
         self.assertEqual([e["title"] for e in museum.events], ["바다 사진전", "현대미술 소장품전"])  # 종료일 순
         self.assertEqual(museum.events[0], {"title": "바다 사진전", "start": "2026-11-01", "end": "2026-11-30",
-                                            "open_run": False, "free": True})
+                                            "open_run": False, "free": True, "rest": None})
         self.assertFalse(museum.events[1]["free"])
         # 기호가 두 번 바뀐 제목도 원래 글자로 보이고, 가격이 비어 있으면 무료 여부는 모름.
         self.assertEqual([e["title"] for e in by_name["부산박물관"].events], ["<호랑이> 기획전", "상설 전시"])

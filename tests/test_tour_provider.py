@@ -159,3 +159,61 @@ class HelperTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+FESTIVALS = [
+    {"contentid": "f1", "contenttypeid": "15", "title": "부산국제매직페스티벌", "addr1": "부산광역시 수영구",
+     "mapx": "129.1180", "mapy": "35.1530", "eventstartdate": "20260628", "eventenddate": "20261226"},
+    {"contentid": "f2", "contenttypeid": "15", "title": "부산 불꽃축제", "addr1": "부산광역시 수영구 광안해변로",
+     "mapx": "129.1186", "mapy": "35.1532", "eventstartdate": "20261114", "eventenddate": "20261114"},   # 끝남
+    {"contentid": "f3", "contenttypeid": "15", "title": "해운대 빛축제", "addr1": "부산광역시 해운대구",
+     "mapx": "129.1604", "mapy": "35.1587", "eventstartdate": "20261128", "eventenddate": "20270131"},  # 아직 시작 전
+    {"contentid": "f4", "contenttypeid": "15", "title": "날짜 없는 행사", "addr1": "부산광역시 중구",
+     "mapx": "129.0300", "mapy": "35.1000"},
+]
+
+
+class FestivalTest(unittest.IsolatedAsyncioTestCase):
+    """축제·행사 요청: 오늘 열리고 있는 것만 (2026-11-23 '끝난 축제가 나온다' 지적)."""
+
+    def setUp(self):
+        FakeClient.calls = []
+        FakeClient.items = FESTIVALS
+        self.patches = [patch.object(tour.httpx, "AsyncClient", FakeClient),
+                        patch.object(tour.settings, "public_data_api_key", "test-key"),
+                        patch.object(tour.settings, "tour_api_url", "https://example.test/KorService2"),
+                        patch.object(tour, "today_kst", lambda: tour.date(2026, 11, 23))]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        FakeClient.items = ITEMS
+
+    async def test_only_ongoing_festivals_with_period(self):
+        places = await TourProvider().search(PlaceRequest(query="진행중인 축제", category="culture"), location="부산")
+        self.assertEqual(FakeClient.calls[-1][0], "searchFestival2")
+        params = FakeClient.calls[-1][1]
+        self.assertEqual(params["lDongRegnCd"], "26")
+        self.assertLessEqual(params["eventStartDate"], "20260628")
+        self.assertEqual([p.name for p in places], ["부산국제매직페스티벌"])
+        self.assertEqual(places[0].events[0]["end"], "2026-12-26")
+        self.assertEqual(places[0].events[0]["kind"], "festival")
+
+    async def test_name_words_narrow_the_list(self):
+        places = await TourProvider().search(PlaceRequest(query="매직 페스티벌", category="culture"), location="부산")
+        self.assertEqual([p.name for p in places], ["부산국제매직페스티벌"])
+        places = await TourProvider().search(PlaceRequest(query="불꽃 축제", category="culture"), location="부산")
+        self.assertEqual(places, [])  # 끝난 불꽃축제는 이름이 맞아도 빼야 한다
+
+    def test_festival_places_without_period_are_dropped(self):
+        from app.schemas.place import Place
+        from app.services.hard_filter import HardFilter
+
+        req = PlaceRequest(query="축제", category="culture")
+        stale = Place(name="부산 불꽃축제", category="culture", sources=["naver"], source_categories={"naver": "축제"})
+        live = Place(name="부산국제매직페스티벌", category="culture", sources=["tour"],
+                     events=[{"title": "부산국제매직페스티벌", "start": "2026-06-28", "end": "2026-12-26", "kind": "festival"}])
+        self.assertEqual([p.name for p in HardFilter().apply(req, [stale, live])], ["부산국제매직페스티벌"])
+        self.assertEqual(HardFilter().apply(req, [stale]), [])

@@ -70,6 +70,11 @@ class ContextService:
         self._stations_cache[cache_key] = stations_list
         return stations_list
 
+    async def forecast(self, point: tuple[float, float]) -> dict | None:
+        """기준점의 단기예보(오늘~3일 뒤) 날짜별 요약. 실패하면 None."""
+        from app.providers.weather import get_forecast
+        return await get_forecast(self.weather_provider, point[0], point[1])
+
     async def weather(self, point: tuple[float, float] | None) -> dict | None:
         """기준점의 현재 날씨. 실패하면 None을 반환한다."""
         if point is None:

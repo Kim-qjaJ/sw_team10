@@ -47,16 +47,22 @@ def finish_search(
     radius_m: int | None = None,
     from_user_location: bool = False,
     keep_shown: bool = False,
+    exclude_words: list[str] | None = None,
+    remember: bool = True,
 ) -> RecommendResponse:
     """검색/주변 시설/후속 질문 공통 마무리: 세션 저장, 템플릿 요약, 처리시간."""
     sessions = ctx.sessions
-    sessions.save_search_intent(request.session_id, intent)
+    if remember:
+        sessions.save_search_intent(request.session_id, intent)
+        sessions.save_last_places(request.session_id, response)
     sessions.save_pending(request.session_id, None)
-    sessions.save_last_places(request.session_id, response)
-    sessions.remember_search(
-        request.session_id, intent, response, request.mode,
-        radius_m=radius_m, from_user_location=from_user_location, keep_shown=keep_shown,
-    )
+    if remember:
+        # 결과가 없는 후속 검색은 직전 검색 조건·기준 좌표·카드 번호를 바꾸지 않는다 (remember=False).
+        sessions.remember_search(
+            request.session_id, intent, response, request.mode,
+            radius_m=radius_m, from_user_location=from_user_location, keep_shown=keep_shown, limit=request.limit,
+            exclude_words=exclude_words,
+        )
     response.route = route_type
     if response.message is None and response.results:
         response.message = ResponseWriter.template_summary(

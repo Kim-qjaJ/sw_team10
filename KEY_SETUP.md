@@ -25,6 +25,32 @@ GROQ_MODEL=openai/gpt-oss-20b
 
 ## 장소/공공데이터 API 키
 
+### TMAP 경로 거리 (선택)
+
+TMAP 보행자·자동차 경로를 사용할 수 있는 SK Open API 앱 키를 `.env`에 넣습니다.
+
+```env
+TMAP_ENABLED=true
+TMAP_API_KEY=
+TMAP_TRANSIT_API_KEY=
+TMAP_TIMEOUT_SECONDS=2
+TMAP_TOTAL_TIMEOUT_SECONDS=4
+TMAP_MAX_ROUTES=40
+TMAP_CONCURRENCY=4
+TMAP_CACHE_TTL_SECONDS=300
+```
+
+`TMAP_API_KEY`는 보행자·자동차 경로에 사용합니다. 대중교통은 별도 상품 권한이 필요하며,
+권한이 있는 키를 `TMAP_TRANSIT_API_KEY`에 넣습니다. 두 상품을 같은 앱 키로 이용할 수 있으면 같은 값을 넣어도 됩니다.
+키를 추가·변경한 뒤 서버를 재시작합니다. 키 값을 보내거나 반환하는 별도 API는 없습니다.
+설정 상태는 `/api/v1/status`의 `tmap.road_configured`와 `transit_configured`에서 확인할 수 있습니다.
+이 값은 키 입력 여부이며 실제 상품 권한을 검증한 결과는 아닙니다. 호출 권한·한도 문제는 `last_error`에 HTTP 상태로 표시합니다.
+
+기준 장소·현재 위치가 있는 추천과 주변 시설 찾기에서 경로 거리를 사용합니다.
+API 키가 없거나 호출이 실패하면 직선거리 추정으로 계속 동작합니다.
+
+### Kakao/Naver/공공데이터
+
 필수 키:
 
 ```env

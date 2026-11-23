@@ -1,6 +1,7 @@
 """LLM Intent 해석과 해석 결과 보정."""
 
 import asyncio
+import re
 
 from fastapi import HTTPException
 
@@ -9,6 +10,7 @@ from app.llm.base import IntentParseError, LLMRateLimitedError, LLMUnavailableEr
 from app.schemas.intent import UserIntent
 from app.services.local_router import needs_session_context
 from app.services.router_lexicon import KNOWN_BRANDS
+from app.services.safe_error import redact
 
 SEARCHABLE_INTENTS = {"recommend_place", "search_place", "get_event"}
 GENERIC_CATEGORY_QUERIES = {"지하철역", "영화관", "카페", "음식점", "술집", "도서관", "병원", "맛집"}
@@ -89,23 +91,47 @@ def keep_free_condition(message: str, intent: UserIntent) -> UserIntent:
 
 def merge_with_session(previous: UserIntent | None, current: UserIntent, message: str = "") -> UserIntent:
     """명시적인 새 검색에는 이전 조건을 섞지 않고, 참조형 후속 질문에만 문맥을 상속한다."""
-    if previous is None or current.intent in {"smalltalk", "place_detail", "compare_results", "clarify", "unsupported"}:
+    text = message.strip()
+    # '더 조용한 곳으로', '좀 더 가까운 데'처럼 직전 결과를 다듬는 말. LLM이 재질문(clarify)으로 봐도 이어 간다.
+    refine = bool(re.match(r"^(좀\s*)?더\s", text))
+    if previous is None or (
+        current.intent in {"smalltalk", "place_detail", "compare_results", "clarify", "unsupported"}
+        and not (refine and current.intent == "clarify" and previous.requests)
+    ):
         return current
 
-    text = message.strip()
     followup_markers = ("그중", "그 중", "거기", "그곳", "아까", "그럼", "대신", "다른", "또", "나머지")
-    is_followup = any(marker in text for marker in followup_markers)
+    is_followup = refine or any(marker in text for marker in followup_markers)
     if not is_followup:
         return current
 
     data = current.model_dump()
+    # 장소 종류를 말하지 않았으면 직전 검색의 종류를 잇고, 새로 말한 조건만 검색어 앞에 붙인다.
+    # LLM이 '조용한 곳'에 아무 종류(activity 등)를 붙여도, '~곳/데/장소'는 종류를 말한 게 아니다.
+    previous_queries = {(r.category, r.query) for r in previous.requests}
+    # 종류를 안 말했거나, LLM이 직전과 똑같은 검색어('카페')를 그대로 낸 경우도 새 조건을 붙여야 한다.
+    vague = lambda r: (not r.get("category")
+                       or re.search(r"(곳|데|장소)(으?로)?$", str(r.get("query") or "").strip())
+                       or (r.get("category"), r.get("query")) in previous_queries)
+    if refine and previous.requests and all(vague(r) for r in data["requests"]):
+        condition = re.sub(r"^(좀\s*)?더\s*", "", text)
+        condition = re.sub(r"\s*(곳|데|장소)?\s*(으?로)?\s*(찾아\s*줘|알려\s*줘|추천해\s*줘|보여\s*줘|부탁해)?[.?!\s]*$", "", condition).strip()
+        inherited = []
+        for request in previous.requests:
+            item = request.model_dump()
+            if condition and condition not in item["query"]:
+                item["query"] = f"{condition} {item['query']}"
+            inherited.append(item)
+        data["requests"] = inherited
+        data["intent"] = previous.intent if previous.intent in SEARCHABLE_INTENTS else "recommend_place"
+        data["question"] = None
     if current.location is None:
         data["location"] = previous.location
     if current.companion is None:
         data["companion"] = previous.companion
     if current.transport_mode is None:
         data["transport_mode"] = previous.transport_mode
-    if not current.requests and previous.requests:
+    if not data["requests"] and previous.requests:
         data["requests"] = [request.model_dump() for request in previous.requests]
     return UserIntent.model_validate(data)
 
@@ -150,18 +176,18 @@ async def parse_intent(ctx, message: str, session_id: str | None = None) -> tupl
                 "code": "llm_rate_limited",
                 "message": "LLM 호출 한도를 초과했어요. 잠시 후 다시 시도하거나 '서면 카페 추천해줘'처럼 "
                            "지역과 장소 종류를 함께 적으면 LLM 없이 바로 검색할 수 있어요.",
-                "debug": str(exc)[:300],
+                "debug": redact(str(exc)[:300]),
             },
         )
     except LLMUnavailableError as exc:
-        raise HTTPException(status_code=503, detail={"code": "llm_unavailable", "message": str(exc)})
+        raise HTTPException(status_code=503, detail={"code": "llm_unavailable", "message": redact(str(exc))})
     except IntentParseError as exc:
         raise HTTPException(
             status_code=422,
             detail={
                 "code": "intent_parse_failed",
                 "message": "요청을 해석하지 못했습니다. 지역과 장소를 넣어 다시 표현해 주세요.",
-                "debug": str(exc)[:500],
+                "debug": redact(str(exc)[:500]),
             },
         )
 

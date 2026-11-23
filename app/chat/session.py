@@ -135,6 +135,8 @@ class SessionStore:
         radius_m: int | None = None,
         from_user_location: bool = False,
         keep_shown: bool = False,
+        limit: int | None = None,
+        exclude_words: list[str] | None = None,
     ) -> None:
         """후속 질문에 쓰도록 직전 검색 조건과 보여준 장소를 저장한다. 결과가 없으면 이전 조건을 유지한다."""
         state = self.ensure(session_id)
@@ -149,4 +151,6 @@ class SessionStore:
             radius_m=radius_m,
             shown=list(dict.fromkeys(shown)),
             from_user_location=from_user_location,
+            limit=limit,
+            exclude_words=list(exclude_words or []),
         )

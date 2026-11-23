@@ -12,6 +12,7 @@ from app.providers.tour import TourProvider
 from app.schemas.api import ProviderStatus
 from app.schemas.intent import PlaceRequest
 from app.schemas.place import Place
+from app.services.safe_error import redact
 
 # 대기 시간을 넘긴 뒤에도 뒤에서 마저 실행 중인 Provider 호출 (작업이 중간에 사라지지 않게 참조를 둔다)
 _BACKGROUND: set[asyncio.Future] = set()
@@ -82,10 +83,11 @@ class APIRouterService:
                 code = e.response.status_code
                 state = "rate_limited" if code == 429 else "error"
                 # 공공데이터포털은 활용 신청 전·키 오류를 본문 메시지로 알려준다. 원인 파악용으로 앞부분만 남긴다.
-                detail = f"HTTP {code} {error_message(e.response.text)}".strip()
+                detail = redact(f"HTTP {code} {error_message(e.response.text)}".strip())
                 return provider.name, [], ProviderStatus(status=state, detail=detail)
             except Exception as e:
-                return provider.name, [], ProviderStatus(status="error", detail=f"{type(e).__name__}: {e}")
+                # 예외 문장에 요청 주소(serviceKey 포함)가 들어갈 수 있어 키·주소를 지운다 (추천 응답에 그대로 실린다).
+                return provider.name, [], ProviderStatus(status="error", detail=redact(f"{type(e).__name__}: {e}"))
 
         async def fetch_with_cap(provider):
             # 늦는 Provider 하나 때문에 전체 응답이 늦어지지 않게 기다리는 시간을 제한한다 (NFR-001).

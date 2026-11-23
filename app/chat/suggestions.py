@@ -27,9 +27,23 @@ def conversation_suggestions(response: RecommendResponse, request: ChatRequest) 
             return _sends(*FACILITY_CHOICES)
         if question == SEARCH_EMPTY_QUESTION:
             return _sends(*SEARCH_EXAMPLES)
+        if "어떤 곳을 찾을까요" in question and response.intent.location:
+            place = response.intent.location.removeprefix("부산 ").strip()
+            return _sends(f"{place} 맛집", f"{place} 카페", f"{place} 관광지")
+        if ("어느 지역" in question or "어디" in question) and any(w in request.message for w in ("축제", "페스티벌", "행사")):
+            return _sends("부산 전체 축제", "해운대 축제", "광안리 축제")
         if "어느 지역" in question or "기준" in question or "어디" in question:
             return _sends("서면", "해운대", "부산역") if mode != "nearby" else _sends("서면역", "부산역", "해운대역")
         return []
+    if intent_type == "smalltalk" and ("기상청" in question or "실내 장소를 찾아 드릴까요" in question):
+        # 날씨 답 뒤에는 그 지역(말하지 않았으면 대표 지역)에서 바로 찾을 수 있는 버튼을 준다.
+        place = response.intent.location
+        raining = "실내 장소를 찾아 드릴까요" in question
+        if place:
+            first = f"비 오는 날 {place} 갈 만한 곳" if raining else f"{place} 관광지 추천해줘"
+            return _sends(first, f"{place} 카페", f"{place} 맛집")
+        if raining:
+            return _sends("비 오는 날 서면 갈 만한 곳", "비 오는 날 해운대 갈 만한 곳", "비 오는 날 광안리 갈 만한 곳")
     if intent_type == "smalltalk":
         # 마무리 인사('이제 없어', '고마워', '잘가')에는 더 할 일을 권하지 않는다.
         if getattr(route_local_reply(request.message), "kind", None) in {"closing", "goodbye", "thanks"}:

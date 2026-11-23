@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from app.config import settings
+from app.services.safe_error import public_error
 
 KST = ZoneInfo("Asia/Seoul")
 # 초단기실황은 한 시간에 한 번 갱신되므로 (격자, 기준 시각)이 같으면 다시 호출하지 않는다.
@@ -107,11 +108,9 @@ class WeatherProvider:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
                 data = response.json()
-            except httpx.HTTPStatusError as exc:
-                self.last_error = f"HTTP {exc.response.status_code} {' '.join(exc.response.text.split())[:150]}"
-                return None
             except Exception as exc:
-                self.last_error = f"{type(exc).__name__}: {str(exc)[:150]}"
+                # 예외 문자열에는 serviceKey가 든 요청 주소가 들어갈 수 있어 종류·상태 코드만 남긴다.
+                self.last_error = public_error(exc, "초단기실황")
                 return None
 
         # 4. 응답 해석
@@ -119,7 +118,8 @@ class WeatherProvider:
             items = data["response"]["body"]["items"]["item"]
         except (KeyError, TypeError):
             header = (data.get("response") or {}).get("header") if isinstance(data, dict) else None
-            self.last_error = f"응답에 관측값 없음 ({base_date} {base_time}, 격자 {nx},{ny}): {header or str(data)[:150]}"
+            code = (header or {}).get("resultCode") if isinstance(header, dict) else None
+            self.last_error = f"응답에 관측값 없음 ({base_date} {base_time}, 격자 {nx},{ny}, 결과 코드 {code or '없음'})"
             return None
 
         is_raining = False
@@ -152,3 +152,84 @@ class WeatherProvider:
             self._cache.clear()
         self._cache[cache_key] = result
         return dict(result)
+
+# 단기예보 발표 시각 (매일 02·05·08·11·14·17·20·23시, 발표 10분 뒤부터 조회 가능)
+FORECAST_HOURS = (2, 5, 8, 11, 14, 17, 20, 23)
+
+
+def forecast_endpoint(url: str) -> str:
+    """같은 서비스(VilageFcstInfoService_2.0)의 단기예보 조회 주소."""
+    url = url.rstrip("/")
+    if url.rsplit("/", 1)[-1].startswith("get"):
+        url = url.rsplit("/", 1)[0]
+    return f"{url}/getVilageFcst"
+
+
+def forecast_base(now: datetime) -> datetime:
+    """지금 조회할 수 있는 가장 최근 단기예보 발표 시각."""
+    ready = now - timedelta(minutes=10)
+    hours = [h for h in FORECAST_HOURS if h <= ready.hour]
+    if hours:
+        return ready.replace(hour=hours[-1], minute=0, second=0, microsecond=0)
+    return (ready - timedelta(days=1)).replace(hour=23, minute=0, second=0, microsecond=0)
+
+
+def summarize_forecast(items: list[dict]) -> dict[str, dict]:
+    """예보 항목을 날짜별로 묶는다: 최대 강수확률, 비·눈 예보 시각, 최저·최고 기온."""
+    days: dict[str, dict] = {}
+    for item in items:
+        day = days.setdefault(str(item.get("fcstDate")), {"pop": None, "wet": [], "kinds": set(), "temps": [],
+                                                           "tmn": None, "tmx": None})
+        category, value, hour = item.get("category"), str(item.get("fcstValue", "")), str(item.get("fcstTime", ""))
+        try:
+            number = float(value)
+        except ValueError:
+            number = None
+        if category == "POP" and number is not None:
+            day["pop"] = max(day["pop"] or 0, int(number))
+        elif category == "PTY" and value not in {"", "0"}:
+            day["wet"].append(hour)
+            day["kinds"].add(PRECIPITATION_TYPES.get(value, "rain"))
+        elif category == "TMP" and number is not None:
+            day["temps"].append(number)
+        elif category == "TMN" and number is not None:
+            day["tmn"] = number
+        elif category == "TMX" and number is not None:
+            day["tmx"] = number
+    for day in days.values():
+        temps = day.pop("temps")
+        if day["tmn"] is None and temps:
+            day["tmn"] = min(temps)
+        if day["tmx"] is None and temps:
+            day["tmx"] = max(temps)
+        day["wet"] = sorted(set(day["wet"]))
+        day["kinds"] = sorted(day["kinds"])
+    return days
+
+
+async def get_forecast(provider: "WeatherProvider", latitude: float, longitude: float) -> dict | None:
+    """기상청 단기예보(오늘~3일 뒤)를 날짜별로 요약한다. 실패하면 None."""
+    api_key = settings.public_data_service_key
+    if not api_key or not settings.kma_api_url:
+        return None
+    nx, ny = provider._dfs_xy(latitude, longitude)
+    base = forecast_base(datetime.now(KST))
+    base_date, base_time = base.strftime("%Y%m%d"), base.strftime("%H00")
+    cache_key = (nx, ny, base_date, "fcst" + base_time)
+    if cache_key in provider._cache:
+        return provider._cache[cache_key]
+    params = {"serviceKey": api_key, "numOfRows": 1000, "pageNo": 1, "dataType": "JSON",
+              "base_date": base_date, "base_time": base_time, "nx": nx, "ny": ny}
+    try:
+        async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
+            response = await client.get(forecast_endpoint(settings.kma_api_url), params=params)
+            response.raise_for_status()
+            items = response.json()["response"]["body"]["items"]["item"]
+    except Exception as exc:
+        provider.last_error = public_error(exc, "단기예보")
+        return None
+    result = {"days": summarize_forecast(items), "issued": base.strftime("%Y-%m-%d %H:00"), "source": "kma_forecast"}
+    if len(provider._cache) >= CACHE_MAX_ENTRIES:
+        provider._cache.clear()
+    provider._cache[cache_key] = result
+    return result

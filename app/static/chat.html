@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <title>부산 한걸음 · 부기와 대화</title>
+    <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
+    <link rel="stylesheet" href="/static/chat.css?v=20261123e" />
+    <script defer src="/static/vendor/leaflet/leaflet.js"></script>
+    <script type="module" src="/static/chat.js?v=20261123f"></script>
+  </head>
+  <body>
+    <div class="app">
+      <section class="room" aria-label="부기와 대화">
+        <header class="room-header">
+          <div class="room-title">
+            <span class="avatar small" aria-hidden="true"></span>
+            <div>
+              <h1 data-service-name>부산 한걸음</h1>
+              <p>부산 장소 안내 · 부기</p>
+            </div>
+          </div>
+          <div class="header-actions">
+            <button type="button" id="toggle-map" class="head-btn" aria-controls="map-panel" aria-expanded="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Zm0 2.2 6 2v11.6l-6-2V6.2Z" /></svg>
+              <span>지도</span>
+            </button>
+            <button type="button" id="new-chat" class="head-btn">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5a7 7 0 1 0 6.7 9h-2.1A5 5 0 1 1 12 7c1.4 0 2.6.6 3.5 1.5L13 11h7V4l-2.4 2.4A7 7 0 0 0 12 5Z" /></svg>
+              <span>새 대화</span>
+            </button>
+          </div>
+        </header>
+
+        <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-relevant="additions"></div>
+
+        <div id="quick-replies" class="quick-replies" aria-label="빠른 답장" hidden></div>
+
+        <form id="composer" class="composer" novalidate>
+          <div class="options">
+            <fieldset class="modes">
+              <legend class="sr-only">검색 방식</legend>
+              <label><input type="radio" name="mode" value="recommend" checked /><span>장소 추천</span></label>
+              <label><input type="radio" name="mode" value="search" /><span>장소 검색</span></label>
+              <label><input type="radio" name="mode" value="nearby" /><span>주변 시설</span></label>
+            </fieldset>
+            <div class="selects">
+              <label id="category-wrap"><span class="sr-only">추천 카테고리</span>
+                <select id="category">
+                  <option value="">종류 자동</option>
+                  <option value="restaurant">음식점</option>
+                  <option value="cafe">카페</option>
+                  <option value="culture">문화시설</option>
+                </select>
+              </label>
+              <label><span class="sr-only">결과 수</span>
+                <select id="limit">
+                  <option value="5">5개</option>
+                  <option value="10">10개</option>
+                  <option value="20">20개</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div id="location-bar" class="location-bar" hidden>
+            <span id="location-status" role="status"></span>
+            <button type="button" id="clear-location" class="text-btn" hidden>위치 해제</button>
+          </div>
+          <div class="input-row">
+            <button type="button" id="locate" class="icon-btn" aria-pressed="false" aria-label="현재 위치 사용">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z" /></svg>
+            </button>
+            <label for="message" class="sr-only">메시지</label>
+            <textarea id="message" rows="1" maxlength="500" placeholder="부기에게 물어보세요" aria-describedby="input-help"></textarea>
+            <button id="send" class="send" type="submit" disabled>전송</button>
+          </div>
+          <p id="input-help" class="sr-only">Enter로 보내고 Shift+Enter로 줄을 바꿔요. 최대 500자.</p>
+        </form>
+      </section>
+
+      <div id="map-backdrop" class="map-backdrop" aria-hidden="true"></div>
+      <aside id="map-panel" class="map-panel" aria-labelledby="map-title">
+        <div class="map-head">
+          <h2 id="map-title">지도</h2>
+          <div>
+            <button id="map-retry" type="button" class="text-btn">다시 표시</button>
+            <button id="close-map" type="button" class="text-btn close-map">작게 보기</button>
+          </div>
+        </div>
+        <div id="map" aria-label="부산 장소 지도"></div>
+        <button type="button" id="map-expand" class="map-expand" aria-label="지도 크게 보기"><span>크게 보기</span></button>
+        <p id="map-status" class="map-note" role="status">지도를 준비하고 있어요.</p>
+        <p id="map-result-status" class="map-note">부기가 찾은 장소가 번호와 함께 여기에 표시돼요.</p>
+        <p class="map-note credit">
+          지도: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap 기여자</a>
+          · 행정동 경계: <a href="https://github.com/vuski/admdongkor" target="_blank" rel="noopener noreferrer">vuski/admdongkor</a> (CC BY 4.0)
+          · 사진: 한국관광공사, 부산광역시
+        </p>
+      </aside>
+    </div>
+  </body>
+</html>

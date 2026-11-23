@@ -10,12 +10,18 @@
 - 그 밖의 검색어('해수욕장', '감천문화마을')는 키워드 검색(searchKeyword2): 부산 + 구·군
   · TourAPI 키워드 검색은 '부산 해수욕장'처럼 지역명을 붙이면 0건이라 검색어만 보낸다.
 
+- 축제·행사를 찾는 요청('축제', '페스티벌', '행사')은 행사정보조회(searchFestival2)로 부산 행사를 받아
+  오늘 열리고 있는 것(시작일 ≤ 오늘 ≤ 종료일)만 쓰고, 기간을 Place.events에 붙인다.
+  카카오·네이버의 '○○축제' 장소는 기간이 없어 끝난 축제가 섞이므로, 하드 필터에서 기간이 붙은 곳만 남긴다.
+
 TourAPI 목록에는 홈페이지 주소가 없다. firstimage는 대표 사진이라 url이 아니라 image_url에 둔다.
 """
 
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -47,6 +53,44 @@ GENERIC_QUERIES = {
 FILLER_WORDS = ("부산광역시", "부산시", "부산", "추천", "근처", "주변", "요즘", "인기", "유명한", "좋은")
 
 NUM_ROWS = 30
+
+# 축제·행사 요청 (행사정보조회 searchFestival2)
+FESTIVAL_WORDS = ("축제", "페스티벌", "행사")
+FESTIVAL_ROWS = 100
+# 이 날짜 이후에 시작한 행사를 받아 오늘 진행 중인지 거른다 (몇 달씩 하는 빛축제·트리축제도 잡히게 넉넉히).
+FESTIVAL_LOOKBACK_DAYS = 200
+FESTIVAL_FILLER = set(FILLER_WORDS) | {"진행중인", "진행", "중인", "지금", "현재", "오늘", "이번주", "열리는", "하는", "축제들"}
+KST = ZoneInfo("Asia/Seoul")
+
+
+def today_kst() -> date:
+    from datetime import datetime
+    return datetime.now(KST).date()
+
+
+def wants_festival(request: PlaceRequest) -> bool:
+    query = _compact(request.query)
+    return any(word in query for word in FESTIVAL_WORDS)
+
+
+def _yyyymmdd(value) -> date | None:
+    text = re.sub(r"\D", "", str(value or ""))[:8]
+    if len(text) != 8:
+        return None
+    try:
+        return date(int(text[:4]), int(text[4:6]), int(text[6:]))
+    except ValueError:
+        return None
+
+
+def festival_words(query: str) -> list[str]:
+    """'해운대 빛 축제' → ['빛'] 처럼 행사 이름을 좁히는 말. 없으면 부산 행사 전체."""
+    words = []
+    for token in (query or "").split():
+        token = re.sub(r"(축제|페스티벌|행사)(들|를|을)?$", "", token)
+        if token and token not in FESTIVAL_FILLER:
+            words.append(token)
+    return words
 from app.services.search_radius import TOUR_DEFAULT_RADIUS_M as DEFAULT_RADIUS_M  # noqa: E402
 from app.services.search_radius import TOUR_MAX_RADIUS_M as MAX_RADIUS_M  # noqa: E402
 
@@ -161,6 +205,9 @@ class TourProvider(PlaceProvider):
             "MobileApp": "sw_team10",
             "_type": "json",
         }
+        if wants_festival(request):
+            return await self._festivals(request, location, anchor, radius_m, base, params)
+
         content_type = CATEGORY_CONTENT_TYPE.get(request.category or "")
         if is_generic(request.query):
             if content_type:
@@ -188,4 +235,40 @@ class TourProvider(PlaceProvider):
         places = [p for item in parse_items(data) if (p := to_place(item, request, anchor, self.name))]
         if anchor and radius_m:
             places = [p for p in places if p.distance_m is not None and p.distance_m <= radius_m]
+        return places
+
+    async def _festivals(self, request, location, anchor, radius_m, base, params) -> list[Place]:
+        """오늘 열리고 있는 부산 축제·행사. 기간은 events로 붙여 화면에 보여준다."""
+        today = today_kst()
+        params.update(numOfRows=FESTIVAL_ROWS, lDongRegnCd="26", arrange="C",
+                      eventStartDate=(today - timedelta(days=FESTIVAL_LOOKBACK_DAYS)).strftime("%Y%m%d"))
+        if not anchor and (code := district_code(location)):
+            params["lDongSignguCd"] = code
+        async with httpx.AsyncClient(timeout=settings.provider_timeout_seconds) as client:
+            response = await client.get(f"{base}/searchFestival2", params=params)
+            response.raise_for_status()
+            data = response.json()
+
+        words = festival_words(request.query)
+        places = []
+        for item in parse_items(data):
+            start, end = _yyyymmdd(item.get("eventstartdate")), _yyyymmdd(item.get("eventenddate"))
+            # 기간을 알 수 없거나 끝났거나 아직 시작하지 않은 행사는 뺀다.
+            if start is None or end is None or not (start <= today <= end):
+                continue
+            title = str(item.get("title") or "")
+            if words and not any(word in _compact(title) for word in words):
+                continue
+            place = to_place(item, request, anchor, self.name)
+            if place is None:
+                continue
+            place.subcategory = "festival"
+            place.source_categories = {self.name: "축제공연행사"}
+            place.events = [{"title": place.name, "start": start.isoformat(), "end": end.isoformat(),
+                             "open_run": False, "free": None, "kind": "festival"}]
+            places.append(place)
+        if anchor and radius_m:
+            places = [p for p in places if p.distance_m is not None and p.distance_m <= radius_m]
+        if anchor:
+            places.sort(key=lambda p: p.distance_m if p.distance_m is not None else float("inf"))
         return places

@@ -106,9 +106,9 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 - 기본 LLM은 Groq입니다(`GROQ_API_KEY` 필요). 로컬 LLM을 쓰려면 `LLM_PROVIDER=ollama`로 바꾸고 Ollama를 실행해 둡니다.
-- Groq 호출 한도·연결 장애 시 Ollama로 자동 전환합니다. 대체 LLM을 쓰지 않으려면 `LLM_FALLBACK_PROVIDER=none`으로 설정합니다. 각 장소 Provider는 `PROVIDER_WAIT_SECONDS`(기본 5.5초)까지만 기다리고 받은 결과로 응답합니다.
 - 지역·장소 종류가 분명한 문장("서면 카페 추천해줘")은 Local Router가 처리하므로 LLM 키 없이도 동작합니다.
-- 질의 로그(선택): Supabase SQL Editor에서 `db/supabase_schema.sql`을 실행한 뒤 `.env`에 `QUERY_LOG_ENABLED=true`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`를 넣습니다. 질의 문장과 처리 경로만 저장하고(세션 ID·좌표 없음), 하루 1회 집계 후 삭제합니다. 저장 상태는 `/api/v1/status`의 `query_log`에서 확인합니다.
+- TMAP 이동 거리 점수: `.env`에 `TMAP_API_KEY`를 넣고 서버를 재시작하면 기준점에서 후보까지의 도보·자동차 경로 거리를 접근성 점수에 반영합니다. 이동수단을 말하지 않으면 도보를 사용합니다. 대중교통은 해당 상품 권한이 있는 키를 `TMAP_TRANSIT_API_KEY`에 별도로 넣습니다. 설정 방법과 동작 범위는 아래 TMAP 절을 참고하세요.
+- 질의 로그(선택): Supabase SQL Editor에서 `db/supabase_schema.sql`을 실행한 뒤 `.env`에 `QUERY_LOG_ENABLED=true`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`를 넣습니다. 질의 문장과 처리 경로만 저장하고(세션 ID·좌표 없음), 하루 1회 집계 후 삭제합니다. 저장 상태는 `/api/v1/status`의 `query_log`에서 확인합니다(`X-Status-Token` 헤더 필요).
 - 부산 데이터: 관광 요청은 부산명소정보(`AttractionService`), 전시 요청은 한국문화정보원 한눈에보는문화정보조회서비스(`cultureinfo`, 지역=부산)를 씁니다. 공공데이터포털에서 두 API를 각각 활용 신청하면 같은 `PUBLIC_DATA_API_KEY`로 부를 수 있습니다. 진행 중인 전시만 결과 카드에 함께 표시하고, 무료 여부·주소·전화는 상세 조회로 채웁니다.
 - 응답 시간: 요청 전체는 `REQUEST_TIMEOUT_SECONDS`(기본 30초), LLM 해석은 `LLM_INTENT_TIMEOUT_SECONDS`(기본 20초) 안에 끝냅니다. LLM이 늦으면 사전으로 확인된 조건만으로 기본 검색을 합니다.
 - API 키 발급 방법은 `KEY_SETUP.md`를 참고합니다.
@@ -121,8 +121,22 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 | `POST /api/v1/recommend` | GUI용 진입점. 자연어 → 해석 → 검색 → 추천 |
 | `POST /api/v1/intent` | 해석 결과(Intent JSON)만 확인 |
 | `POST /api/v1/recommend/intent` | 완성된 Intent로 검색·추천만 실행 (디버깅용) |
-| `GET /api/v1/status` | LLM·Provider 설정, 지역 사전 상태 |
+| `GET /api/v1/status` | LLM·Provider 설정 여부. 최근 오류·캐시 같은 운영 진단 정보는 `.env`의 `STATUS_TOKEN` 값을 `X-Status-Token` 헤더로 보낸 요청에만 보여준다 |
 | `GET /health` | 상태 확인 |
+
+## TMAP 이동 거리 점수
+
+1. 프로젝트 루트 `.env`에 `TMAP_API_KEY=발급받은_앱키`를 추가하고 서버를 재시작합니다. 브라우저 코드에는 키를 넣지 않습니다.
+2. `부산역 근처 걸어서 갈 카페`처럼 기준 장소를 지정하거나 현재 위치로 주변 시설을 찾습니다. 도보는 보행자 경로, 자동차는 차량 경로를 사용하고 이동수단이 없으면 도보를 사용합니다. 대중교통은 요약정보 API 권한이 있는 키를 `TMAP_TRANSIT_API_KEY`에 설정한 경우 연결합니다.
+3. `/api/v1/status`의 `tmap`에서 키 설정 여부와 최근 오류를 확인합니다(`X-Status-Token` 헤더 필요). 추천 응답의 `score_breakdown.access.reason`에 `TMAP 도보 이동 거리 …m` 같은 근거가 표시됩니다.
+
+- 점수에는 TMAP이 돌려준 총 이동 거리(m)를 사용합니다. 예상 시간은 도보·자동차·대중교통 시간 필드에 따로 표시하며, 거리 점수를 시간 점수로 바꾸지 않습니다.
+- 지리적 검색 반경(1.5 → 3 → 5km)은 기존 직선거리 기준입니다. 경로가 돌아가는 장소도 반경 안이면 후보로 유지하고 이동 거리에 따라 점수를 낮춥니다.
+- 기준 시설·현재 위치가 있으면 그 지점에서 계산합니다. 동 단위 검색은 지역 대표점에서 계산하며 사용자의 실제 출발지가 아닙니다. 구 전체처럼 의미 있는 출발점이 없는 검색과 순서 유지용 장소 검색에는 경로 API를 호출하지 않습니다.
+- 기본 상한은 한 추천 요청 전체에서 신규 경로 40개, 동시 호출 4개, 대기 4초입니다. 상한을 넘는 후보는 가까운 곳부터 조회하고, 나머지나 API 오류는 직선거리 추정으로 계산해 안내합니다. 키가 없거나 `TMAP_ENABLED=false`이면 기존 계산을 유지합니다. 인증·호출 한도 오류(401·403·429)가 나면 30초부터 최대 10분까지 쉬는 시간을 늘려 가며 TMAP을 부르지 않고(`/api/v1/status`의 `tmap.paused_seconds`), 기준점에서 50m 안의 장소는 경로를 묻지 않습니다.
+- 경로 요약은 메모리에 기본 5분(최대 1시간) 보관합니다. 경로 조회 시 출발·도착 좌표가 TMAP에 전송되며, 키·좌표·전체 경로는 로그나 DB에 새로 저장하지 않습니다.
+
+공식 규격: [보행자 경로](https://tmap-skopenapi.readme.io/reference/보행자-경로안내), [자동차 경로](https://tmap-skopenapi.readme.io/reference/자동차-경로안내), [대중교통 요약정보](https://transit.tmapmobility.com/docs/routes/sub).
 
 ## 테스트
 
@@ -131,7 +145,8 @@ python -m pytest                       # 백엔드 테스트 (외부 API·LLM �
 
 # 프론트 스모크 테스트: Mock 서버를 8000 포트로 띄운 상태에서 실행
 pip install playwright && playwright install chromium
-python frontend-tests/smoke.py
+python frontend-tests/smoke.py        # 예전 검색 화면(/classic)
+python frontend-tests/chat_smoke.py   # 메신저형 기본 화면(/), PC·태블릿·모바일 크기
 ```
 
 ## 데이터 출처

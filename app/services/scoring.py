@@ -191,8 +191,15 @@ def access_score(
     lng: float | None,
     stations: list[tuple[str, float, float]] | None,
     place_minutes: dict[str, float | None] | None = None,
+    route_distance_m: float | None = None,
 ) -> tuple[float, str] | None:
     """이동수단(walk/transit/car)별 접근성. 미지정이면 기준점 거리로 계산한다."""
+    if route_distance_m is not None:
+        route_mode = mode or "walk"
+        scale = scale_m * MODE_SCALE.get(route_mode, 1.0)
+        label = {"walk": "도보", "transit": "대중교통", "car": "자동차"}[route_mode]
+        # TMAP 시간도 표시하지만, 거리별 점수는 총 이동 거리로 계산한다.
+        return _decay(max(0.0, route_distance_m - NEAR_M), scale), f"TMAP {label} 이동 거리 {round(route_distance_m):,}m"
     minutes = (place_minutes or {}).get(mode or "")
     if mode and minutes is not None:
         limit = {"walk": 20.0, "transit": 40.0, "car": 25.0}[mode]
@@ -203,7 +210,9 @@ def access_score(
         return None
     scale = scale_m * MODE_SCALE.get(mode or "", 1.0)
     base = _decay(max(0.0, distance_m - NEAR_M), scale)
-    dist_text = f"기준점에서 {round(distance_m):,}m"
+    # 50m 안은 경로를 묻지 않는 거리라(route_distance.ROUTE_MIN_M) '기준점 인근'으로 쓴다. 화면 카드 표현과 같다.
+    dist_text = (f"검색 기준점 인근 (직선 {round(distance_m)}m)" if distance_m < 50
+                 else f"기준점에서 직선거리 {round(distance_m):,}m (추정)")
 
     if mode == "walk":
         return base, f"도보 기준 {dist_text}"

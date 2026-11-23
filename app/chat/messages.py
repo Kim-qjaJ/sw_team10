@@ -21,6 +21,24 @@ MODE_GUIDE = {
 
 ROUTE_NEEDS_PLACE = "어느 장소로 가는 길을 찾을까요? 먼저 장소를 검색한 뒤 '1번 길찾기'처럼 물어봐 주세요."
 FOLLOWUP_EXHAUSTED = "같은 조건에서 더 보여드릴 곳을 찾지 못했어요. 범위를 넓히거나 다른 조건으로 물어봐 주세요."
+def josa(word: str, with_final: str, without_final: str) -> str:
+    """받침에 맞는 조사: josa('전포', '으로', '로') → '전포로'. 한글이 아니면 받침 없는 쪽을 쓴다."""
+    last = word[-1] if word else ""
+    if not ("가" <= last <= "힣"):
+        return word + without_final
+    final = (ord(last) - 0xAC00) % 28
+    if with_final == "으로" and final == 8:  # ㄹ 받침은 '로'
+        return word + without_final
+    return word + (with_final if final else without_final)
+
+
+def max_radius_reached(query: str, place: str | None = None, max_label: str = "5km") -> str:
+    """최대 반경까지 찾았는데 없을 때: 더 넓히라고 하지 않고, 같은 시설을 다른 기준 장소에서 찾자고 한다."""
+    where = f"'{place}' 주변 " if place else ""
+    return (f"{where}최대 {max_label}까지 찾았지만 '{query}' 결과가 없어요. 다른 기준 장소를 알려 주시면 "
+            f"'{query}' 검색을 이어서 할게요. (예: 가덕도동, 하단역)")
+
+
 EXPAND_NOT_POSSIBLE = "지역 이름으로 찾은 결과라 범위를 넓힐 수 없어요. 기준 장소를 함께 적어 주세요. (예: 서면역 근처 카페)"
 
 # 후속 버튼 예시

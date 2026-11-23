@@ -3,6 +3,7 @@ from app.config import settings
 from app.providers.base import PlaceProvider, ProviderNotConfigured
 from app.schemas.intent import PlaceRequest
 from app.schemas.place import Place
+from app.services.search_radius import POINT_RADIUS_M
 
 KAKAO_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 
@@ -45,6 +46,16 @@ class KakaoProvider(PlaceProvider):
             response = await client.get(KAKAO_SEARCH_URL, headers=headers, params=params)
             response.raise_for_status()
             data = response.json()
+            limit_m = min(radius_m or POINT_RADIUS_M, 20000)
+            near = [d for d in data.get("documents", []) if str(d.get("distance", "")).isdigit()
+                    and int(d["distance"]) <= limit_m]
+            if not near and anchor and query_text != request.query:
+                # '대항항 약국'처럼 기준 장소 이름을 붙이면 아무것도 안 나오거나 먼 곳만 나오는 경우가 있다.
+                # 좌표가 있으면 이름을 빼고 기준점 반경 안에서 가까운 순으로 한 번 더 찾는다 (2026-11-23).
+                retry = {**params, "query": request.query, "sort": "distance", "radius": limit_m}
+                response = await client.get(KAKAO_SEARCH_URL, headers=headers, params=retry)
+                response.raise_for_status()
+                data = response.json()
 
         # 4. 카카오 응답을 공통 Place 객체 리스트로 변환
         documents = data.get("documents", [])

@@ -180,6 +180,21 @@ class ConfidenceTest(unittest.TestCase):
         self.assertEqual(result[0].name, "B")
         self.assertGreater(result[0].rank_score, result[1].rank_score)
 
+    def test_shown_score_matches_order(self):
+        """화면 '추천 점수'(score)가 높은 곳이 아래 번호로 밀리지 않는다 (2026-11-23 지적).
+
+        정보가 적은 B는 환산 점수(base_score)가 A보다 높아도 보정 뒤 점수(score)가 낮으면 아래이고,
+        그때 화면에도 그 낮은 점수가 보인다."""
+        a = place("A", 0.001, category="cafe", source_categories={"k": "카페"}, sources=["kakao", "naver"], busan_verified=True)
+        b = place("B", 0.0005, category="cafe", source_categories={"k": "카페"})
+        c = place("C", 0.003, category="cafe", sources=["kakao"])
+        result = RecommendationService().rank(INTENT, REQ, [b, c, a], anchor=ANCHOR)
+        scores = [p.score for p in result]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+        for p in result:
+            self.assertEqual(p.score, p.rank_score)
+            self.assertLessEqual(p.score, p.base_score)
+
 
 class RealCategoryRankTest(unittest.TestCase):
     """Kakao 업종 경로 형태의 데이터로 사용자 조건·날씨가 순위를 가르는지 확인한다."""

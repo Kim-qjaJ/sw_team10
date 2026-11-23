@@ -3,6 +3,7 @@ import {
   finite,
   validCoords,
   link,
+  safeURL,
   validateResponse,
   categoryNames,
 } from "./ui-utils.js";
@@ -300,9 +301,40 @@ function makeCard(p, key, number, resultType) {
       "tag",
     ),
   );
-  card.append(top, el("h3", p.name));
+  card.append(top);
+  // TourAPI 대표 사진. https로 바꿔 불러온다 (http 사진은 https 페이지에서 막힌다).
+  const photo = safeURL(
+    typeof p.image_url === "string" ? p.image_url.replace(/^http:/, "https:") : null,
+  );
+  if (photo) {
+    const img = el("img", null, "place-photo");
+    img.src = photo;
+    img.alt = `${p.name} 사진`;
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.addEventListener("error", () => img.remove());
+    card.append(img);
+  }
+  card.append(el("h3", p.name));
   card.append(el("p", p.address || "주소 정보 없음"));
   if (p.phone) card.append(el("p", `전화 ${p.phone}`));
+  // 부산 전시 목록: 이 장소에서 지금 열리는 전시
+  if (Array.isArray(p.events) && p.events.length) {
+    const SHOWN_EVENTS = 5;
+    const valid = p.events.filter((e) => e && typeof e.title === "string");
+    const events = el("ul", null, "events");
+    for (const e of valid.slice(0, SHOWN_EVENTS)) {
+      const period =
+        e.open_run && typeof e.end !== "string"
+          ? "상시"
+          : [e.start, e.end].filter((d) => typeof d === "string").join(" ~ ");
+      const extra = [period, e.free ? "무료" : null].filter(Boolean).join(", ");
+      events.append(el("li", extra ? `전시 ${e.title} (${extra})` : `전시 ${e.title}`));
+    }
+    if (valid.length > SHOWN_EVENTS)
+      events.append(el("li", `외 전시 ${valid.length - SHOWN_EVENTS}개`));
+    if (events.childElementCount) card.append(events);
+  }
   const metrics = [];
   if (finite(p.distance_m) && p.distance_m >= 0)
     metrics.push(

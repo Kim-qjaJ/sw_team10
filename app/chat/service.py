@@ -6,11 +6,12 @@
     - nearby     : 주변 시설. 현재 위치 좌표 기준 반경 검색 (결과가 없으면 반경 확장)
 """
 
+import re
 import time
 
 from app.chat.conversation import handle_conversation
 from app.chat.followup_handler import handle_followup
-from app.chat.messages import MODE_GUIDE
+from app.chat.messages import MODE_GUIDE, SEARCH_EMPTY_QUESTION
 from app.chat.nearby import handle_nearby
 from app.chat.responses import simple_response
 from app.chat.search import handle_search
@@ -19,12 +20,20 @@ from app.chat.suggestions import build_suggestions
 from app.schemas.api import ChatRequest, Link, RecommendResponse
 from app.schemas.intent import UserIntent
 from app.services.followup import plan_followup
-from app.services.local_router import format_place_fields, format_route, requested_count, route_local_reply
+from app.services.local_router import HELP_REPLY, format_place_fields, format_route, place_links, requested_count, route_local_reply
 from app.services.mode_router import apply_category_hint
 
 
 async def handle_chat(ctx, request: ChatRequest) -> RecommendResponse:
     started = time.perf_counter()
+    # '<script>' 같은 태그는 뜻이 없는 글자라 지운다. 남겨 두면 LLM이 짧은 대화로 보고 장소를 지어낼 수 있다.
+    cleaned = re.sub(r"\s+", " ", re.sub(r"<[^<>]{0,200}>", " ", request.message)).strip()
+    if not cleaned:
+        # 공백·태그뿐인 문장은 LLM에 보내지 않고 바로 안내한다.
+        return simple_response(SEARCH_EMPTY_QUESTION if request.mode == "search" else HELP_REPLY,
+                               UserIntent(intent="smalltalk"), started, "local")
+    if cleaned != request.message:
+        request = request.model_copy(update={"message": cleaned})
     # '3개만 추천해줘'처럼 개수를 말하면 그만큼만 보여준다.
     if (count := requested_count(request.message)) is not None:
         request = request.model_copy(update={"limit": count})
@@ -69,7 +78,9 @@ def quick_reply(request: ChatRequest, state: SessionState | None, started: float
     if local_detail is not None:
         if state:
             state.updated_at = time.monotonic()
-        return simple_response(local_detail, UserIntent(intent="place_detail"), started, "local")
+        response = simple_response(local_detail, UserIntent(intent="place_detail"), started, "local")
+        response.links = [Link(**link) for link in place_links(request.message, recent_places)]
+        return response
 
     # '1번 길찾기', '거기 어떻게 가' → 직전 결과 장소의 카카오맵 길찾기 링크
     route = format_route(request.message, recent_places, origin=state.origin if state else None)
