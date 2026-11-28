@@ -114,6 +114,38 @@ class MergeTest(unittest.TestCase):
         merged = self.merger.merge([kakao("E공원"), Place(name="E공원", sources=["tour"], latitude=35.1, longitude=129.0)])
         self.assertEqual(merged[0].popularity_signal, 1.0)
 
+    def test_real_biff_duplicates_merged(self):
+        """2026-11 실제 '남포동 관광' 데이터: 같은 장소가 표기·좌표 차이로 5번 나왔다."""
+        def at(name, src, lat, lng):
+            return Place(name=name, latitude=lat, longitude=lng, sources=[src], source_ids={src: name})
+        result = self.merger.merge([
+            at("BIFF광장", "kakao", 35.0988679, 129.0290456),
+            at("BIFF거리", "kakao", 35.0985283, 129.0290898),
+            at("비프광장", "naver", 35.098723, 129.029021),        # 영문/한글 표기, 16m
+            at("부산BIFF거리", "naver", 35.098519, 129.02677),     # 넓은 장소, 211m
+            at("BIFF 광장", "tour", 35.0980090, 129.0320043),      # 같은 이름, 286m
+        ])
+        self.assertEqual([sorted(p.sources) for p in result], [["kakao", "naver", "tour"], ["kakao", "naver"]])
+
+    def test_wide_rule_needs_same_area_word(self):
+        # 이름이 같은 넓은 장소 말로 끝나지 않으면 200m 기준 그대로 (입구 근처 가게는 별개)
+        result = self.merger.merge([kakao("해운대해수욕장"), naver("해운대해수욕장입구점", 300 / M_PER_DEG)])
+        self.assertEqual(len(result), 2)
+        # 완전히 같은 이름이라도 500m를 넘으면 별개
+        self.assertEqual(len(self.merger.merge([kakao("할매국밥"), naver("할매국밥", 600 / M_PER_DEG)])), 2)
+
+    def test_same_core_name_merged(self):
+        """2026-11 실제 '서면 방탈출': 같은 가게(3m, 같은 주소)가 이름 앞뒤 말이 달라 1위·5위로 두 번 나왔다."""
+        result = self.merger.merge([kakao("서면방탈출 카타르시스이스케이프"), naver("카타르시스 이스케이프 서면점", 3 / M_PER_DEG)])
+        self.assertEqual(len(result), 1)
+
+    def test_core_name_rule_keeps_branches_apart(self):
+        # 지점명이 둘 다 있고 다르면 다른 가게 (가까워도)
+        self.assertEqual(len(self.merger.merge([kakao("이재모피자 본점"), naver("이재모피자 서면점", 30 / M_PER_DEG)])), 2)
+        # 핵심 이름이 같아도 50m를 넘으면 별개
+        self.assertEqual(len(self.merger.merge([kakao("서면방탈출 카타르시스이스케이프"),
+                                                naver("카타르시스 이스케이프 서면점", 120 / M_PER_DEG)])), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

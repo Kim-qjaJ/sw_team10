@@ -9,6 +9,8 @@ pipeline.py의 exact_place 검색에서 아래 순서로 호출합니다.
   ('부산시청' = '부산광역시청', '스타벅스 서면점' = '스타벅스 부산서면점').
 - 본점·지점은 이름이 검색어로 시작해야 한다 ('미남스시 부산시청 본점'은 '부산시청'의 본점이 아니다).
 - 지점 목록에서 주차장·화장실 같은 부대시설은 뺀다 ('광안리 공영주차장'). 검색어가 부대시설이면 남긴다.
+- 캠퍼스 목록은 주소가 부산으로 시작하는 곳만 남긴다 ('경상남도 양산시 물금읍 부산대학로'의 양산캠퍼스 제외).
+  주소가 없으면 판단하지 않고 남긴다.
 """
 
 from app.schemas.place import Place
@@ -17,6 +19,11 @@ from app.services.scoring import AMENITY_WORDS, is_amenity
 
 def _norm(text: str) -> str:
     return "".join(text.split()).casefold()
+
+
+def _in_busan(place: Place) -> bool:
+    """주소가 부산으로 시작하는지. 도로 이름의 '부산'(부산대학로)은 부산 주소로 보지 않는다. 주소가 없으면 True."""
+    return not place.address or place.address.strip().startswith("부산")
 
 
 def _loose(text: str) -> str:
@@ -33,7 +40,8 @@ class ExactPlaceMatcher:
         # 이름이 정확히 같은 장소(예: '동아대학교')가 있으면 단일 장소 검색으로 처리한다.
         if any(_norm(p.name) == key for p in places):
             return []
-        campuses = [p for p in places if _norm(p.name).startswith(key) and _norm(p.name).endswith("캠퍼스")]
+        campuses = [p for p in places
+                    if _norm(p.name).startswith(key) and _norm(p.name).endswith("캠퍼스") and _in_busan(p)]
         # '본교'·'본캠퍼스'를 대표로 우선하고, 나머지는 입력(Provider 정확도) 순서를 유지한다.
         campuses.sort(key=lambda p: 0 if "본" in p.name else 1)
         return campuses

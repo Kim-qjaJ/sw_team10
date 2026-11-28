@@ -2,8 +2,15 @@
 
 같은 장소 판정 (서로 다른 Provider의 결과일 때만):
 1) 정규화한 이름이 같거나 한쪽이 다른 쪽을 포함하고, 좌표가 SAME_PLACE_M 이내(좌표가 없으면 주소 일치)
+   - 이름이 완전히 같으면 WIDE_PLACE_M까지 본다 (TourAPI 'BIFF 광장' 좌표가 카카오와 286m 차이).
+   - 거리·광장·해수욕장처럼 넓은 장소(두 이름이 같은 AREA_WORDS로 끝남)도 WIDE_PLACE_M까지 본다
+     ('BIFF거리'/'부산BIFF거리' 211m).
 2) 또는 이름 유사도가 SIMILAR_NAME_RATIO 이상이고, 좌표가 SIMILAR_PLACE_M 이내 (표기 오타 보완)
+3) 또는 핵심 이름이 같고 좌표가 SIMILAR_PLACE_M 이내. 핵심 이름은 지점명('서면점')과 '지역+업종' 말('서면방탈출')을
+   뺀 이름이다 ('서면방탈출 카타르시스이스케이프' = '카타르시스 이스케이프 서면점', 3m). 지점명이 둘 다 있고 다르면
+   다른 장소로 본다 ('이재모피자 본점' ≠ '이재모피자 서면점').
 이름 정규화: 공백·특수문자·대소문자 무시, 숫자는 한글로 읽는다 ('송정3대국밥' = '송정삼대국밥').
+영문 표기는 NAME_ALIASES로 한글로 바꾼다 ('BIFF광장' = '비프광장').
 같은 Provider 안의 결과는 별개 장소로 본다.
 먼저 들어온 결과(Provider 순서)를 기준으로 두고 비어 있는 값만 다른 결과로 채운다.
 
@@ -16,10 +23,20 @@ import re
 from difflib import SequenceMatcher
 
 from app.schemas.place import Place
-from app.services.scoring import haversine_m
+from app.services.scoring import CATEGORY_WORDS, haversine_m
 
 # 같은 장소로 볼 최대 좌표 거리(m)
 SAME_PLACE_M = 200
+# 이름이 완전히 같거나 넓은 장소일 때의 최대 좌표 거리(m). Provider마다 넓은 장소의 대표 좌표가 다르다.
+WIDE_PLACE_M = 500
+# 넓은 장소의 이름 끝말. 두 이름이 같은 말로 끝날 때만 적용한다 ('해운대해수욕장'과 '해운대해수욕장입구점'은 제외).
+AREA_WORDS = ("거리", "광장", "골목", "해수욕장", "해변", "공원", "시장", "마을")
+# 핵심 이름 비교에서 빼는 '지역+업종' 말: 앞에 붙은 지역명이 이 길이 이하이고 업종 단어로 끝나는 낱말 ('서면방탈출')
+_PREFIX_MAX = 3
+_KIND_WORDS = tuple(sorted({w for words in CATEGORY_WORDS.values() for w in words}, key=len, reverse=True))
+_CITY_WORDS = {"부산", "부산광역시", "부산시"}
+# 같은 장소를 영문/한글로 다르게 쓰는 표기 (정규화한 소문자 기준, 2026-11 실제 데이터)
+NAME_ALIASES = {"biff": "비프", "bexco": "벡스코"}
 # 이름이 포함 관계가 아니어도, 이만큼 가깝고 이름이 이만큼 비슷하면 같은 장소로 본다.
 # 0.85는 '이재모피자 본점'/'이재모피자 서면점'(0.8) 같은 지점 차이를 합치지 않는 값이다.
 SIMILAR_PLACE_M = 50
@@ -46,7 +63,39 @@ def _rank_signal(source: str, rank: int) -> float | None:
 
 
 def _norm_name(name: str) -> str:
-    return "".join(ch for ch in name.casefold() if ch.isalnum()).translate(_DIGITS)
+    text = "".join(ch for ch in name.casefold() if ch.isalnum()).translate(_DIGITS)
+    for alias, korean in NAME_ALIASES.items():
+        text = text.replace(alias, korean)
+    return text
+
+
+def _core_name(name: str) -> tuple[str, str | None]:
+    """(핵심 이름, 지점명). 띄어쓰기 단위로 지점명('서면점')과 '지역+업종' 낱말('서면방탈출', '부산')을 뺀다."""
+    core: list[str] = []
+    branch = None
+    for token in name.split():
+        word = _norm_name(token)
+        if len(word) >= 2 and word.endswith("점"):
+            branch = word
+        elif word in _CITY_WORDS or any(word.endswith(k) and len(word) - len(k) <= _PREFIX_MAX for k in _KIND_WORDS):
+            continue
+        else:
+            core.append(word)
+    return "".join(core), branch
+
+
+def _same_core_nearby(a: Place, b: Place) -> bool:
+    if None in (a.latitude, a.longitude, b.latitude, b.longitude):
+        return False
+    (core_a, branch_a), (core_b, branch_b) = _core_name(a.name), _core_name(b.name)
+    if len(core_a) < 4 or core_a != core_b or (branch_a and branch_b and branch_a != branch_b):
+        return False
+    return haversine_m(a.latitude, a.longitude, b.latitude, b.longitude) <= SIMILAR_PLACE_M
+
+
+def _is_wide_place(a: str, b: str) -> bool:
+    """두 이름이 같은 넓은 장소 끝말(거리·광장·해수욕장 등)로 끝나는지."""
+    return any(a.endswith(w) and b.endswith(w) for w in AREA_WORDS)
 
 
 def _norm_address(address: str | None) -> str:
@@ -71,9 +120,9 @@ def _similar_nearby(a: Place, b: Place, name_a: str, name_b: str) -> bool:
     return SequenceMatcher(None, name_a, name_b).ratio() >= SIMILAR_NAME_RATIO
 
 
-def _same_location(a: Place, b: Place) -> bool:
+def _same_location(a: Place, b: Place, limit_m: float = SAME_PLACE_M) -> bool:
     if None not in (a.latitude, a.longitude, b.latitude, b.longitude):
-        return haversine_m(a.latitude, a.longitude, b.latitude, b.longitude) <= SAME_PLACE_M
+        return haversine_m(a.latitude, a.longitude, b.latitude, b.longitude) <= limit_m
     addr_a, addr_b = _norm_address(a.address), _norm_address(b.address)
     return bool(addr_a) and addr_a == addr_b
 
@@ -112,9 +161,11 @@ class PlaceMerger:
         if set(base.sources) & set(other.sources):
             return False
         name_a, name_b = _norm_name(base.name), _norm_name(other.name)
-        if _same_name(name_a, name_b) and _same_location(base, other):
-            return True
-        return _similar_nearby(base, other, name_a, name_b)
+        if _same_name(name_a, name_b):
+            wide = name_a == name_b or _is_wide_place(name_a, name_b)
+            if _same_location(base, other, WIDE_PLACE_M if wide else SAME_PLACE_M):
+                return True
+        return _similar_nearby(base, other, name_a, name_b) or _same_core_nearby(base, other)
 
     @staticmethod
     def _absorb(base: Place, other: Place) -> None:

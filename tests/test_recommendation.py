@@ -153,6 +153,9 @@ class ScoringTest(unittest.TestCase):
         self.assertFalse(infer_indoor_with_name("관광명소", "흰여울문화마을"))
         self.assertFalse(infer_indoor_with_name("관광지", "민락수변공원"))
         self.assertIsNone(infer_indoor_with_name("관광지", "부산엑스더스카이"))
+        # 실제 TourAPI: 걷기 길은 업종이 '레포츠'뿐이다 ('해운대 실내 놀거리'에 5위로 나왔던 곳)
+        self.assertFalse(infer_indoor_with_name("레포츠", "[해파랑길] 2코스"))
+        self.assertFalse(infer_indoor_with_name("레포츠", "갈맷길 1코스"))
         # 업종 단서가 있으면 업종을 따른다
         self.assertTrue(infer_indoor_with_name("음식점 > 카페", "바다공원 카페"))
 
@@ -477,6 +480,66 @@ class HardFilterTest(unittest.TestCase):
         self.assertEqual(kept(True), ["아쿠아리움", "방탈출", "카페거리", "업종없음", "명시 실내 해변"])
         self.assertEqual(kept(False), ["해수욕장", "동백섬", "카페거리", "업종없음"])
         self.assertEqual(len(kept(None)), len(places))
+
+
+
+class PlaceKindFilterTest(unittest.TestCase):
+    """장소 종류가 분명한 검색어면 맞는 장소만 남긴다 (2026-11 실제 '기장 해수욕장')."""
+
+    def kept(self, query, category, places):
+        return [p.name for p in HardFilter().apply(PlaceRequest(query=query, category=category), places)]
+
+    def test_beach_query_keeps_only_beaches(self):
+        places = [
+            Place(name="일광해수욕장", source_categories={"kakao": "여행 > 관광,명소 > 해수욕장,해변"}),
+            Place(name="임랑해수욕장", source_categories={"kakao": "여행 > 관광,명소 > 해수욕장,해변"}),
+            Place(name="오랑대", source_categories={"naver": "여행,명소>지역명소"}),
+            Place(name="스카이라인루지 부산", source_categories={"naver": "스포츠,오락>루지"}),
+        ]
+        self.assertEqual(self.kept("해수욕장", "tourism", places), ["일광해수욕장", "임랑해수욕장"])
+
+    def test_fewer_than_two_matches_not_filtered(self):
+        places = [Place(name="일광해수욕장", source_categories={"kakao": "여행 > 관광,명소 > 해수욕장,해변"}),
+                  Place(name="오랑대", source_categories={"naver": "여행,명소>지역명소"})]
+        self.assertEqual(len(self.kept("해수욕장", "tourism", places)), 2)
+
+    def test_not_applied_to_menu_activity_or_generic_queries(self):
+        surf = [Place(name="서프로드", source_categories={"kakao": "스포츠,레저 > 수영,수상 > 수상스포츠"}),
+                Place(name="A서핑", source_categories={"naver": "스포츠,오락>서핑,윈드서핑"}),
+                Place(name="B서핑", source_categories={"naver": "스포츠,오락>서핑,윈드서핑"})]
+        self.assertEqual(len(self.kept("서핑", "activity", surf)), 3)
+        tour = [Place(name="해운대해수욕장", source_categories={"kakao": "여행 > 관광,명소 > 해수욕장,해변"}),
+                Place(name="광안리해수욕장", source_categories={"kakao": "여행 > 관광,명소 > 해수욕장,해변"}),
+                Place(name="부산타워", source_categories={"kakao": "여행 > 관광,명소 > 전망대"})]
+        self.assertEqual(len(self.kept("관광지", "tourism", tour)), 3)
+
+
+class SubFacilityTest(unittest.TestCase):
+    """같은 시설의 세부 시설이 추천 결과를 채우지 않는다 (2026-11 실제 '센텀 전시' 8곳 중 4곳이 벡스코)."""
+
+    def places(self):
+        hall = {"kakao": "문화,예술 > 문화시설 > 전시관"}
+        return [place("벡스코", 0.001, source_categories=hall),
+                place("벡스코 제1전시장", 0.0012, source_categories=hall),
+                place("벡스코 야외전시장", 0.0013, source_categories=hall),
+                place("아르떼뮤지엄", 0.002, source_categories=hall),
+                place("벡스코 멀리", 0.012, source_categories=hall)]  # 1.2km 떨어지면 세부 시설이 아님
+
+    def test_recommendation_skips_sub_facilities(self):
+        req = PlaceRequest(query="전시", category="culture")
+        names = [p.name for p in RecommendationService().rank(
+            UserIntent(intent="recommend_place", requests=[req]), req, self.places(), limit=5, anchor=ANCHOR)]
+        self.assertIn("벡스코", names)
+        self.assertNotIn("벡스코 제1전시장", names)
+        self.assertNotIn("벡스코 야외전시장", names)
+        self.assertIn("아르떼뮤지엄", names)
+        self.assertIn("벡스코 멀리", names)
+
+    def test_exact_search_keeps_sub_facilities(self):
+        req = PlaceRequest(query="벡스코", search_mode="exact_place")
+        names = [p.name for p in RecommendationService().rank(
+            UserIntent(intent="search_place", requests=[req]), req, self.places(), limit=5, anchor=ANCHOR)]
+        self.assertIn("벡스코 제1전시장", names)
 
 
 if __name__ == "__main__":
