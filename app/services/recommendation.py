@@ -5,6 +5,7 @@
 환산 덕분에 정보가 적은 장소가 위로 오르지 않도록 데이터 신뢰도(data_confidence)로 약간 낮춘 값이 최종 추천 점수(score)다.
 화면에 보이는 '추천 점수'와 순위 기준은 같은 score다 (rank_score는 예전 이름으로 score와 같은 값).
 점수 계산이 실패하면 기본 순위(인기 신호 → 거리 → 입력 순서)로 상위 N개를 돌려준다.
+장소 추천에서는 이미 고른 시설의 세부 시설('벡스코' 뒤의 '벡스코 제1전시장')을 건너뛰고 다음 장소로 채운다.
 """
 
 import logging
@@ -22,6 +23,16 @@ logger = logging.getLogger(__name__)
 # 기준 시설(역, 구청 등) 주변 추천의 기본 반경은 search_radius.py의 POINT_RADIUS_M을 쓴다.
 
 FALLBACK_REASON = "점수 계산에 실패해 기본 순위(인기·거리순)로 보여줍니다"
+
+# 세부 시설로 볼 최대 거리(m). 같은 시설 안의 전시장·야외 공간은 이 안에 있다 (벡스코 본관~제2전시장 약 200m).
+SUB_FACILITY_M = 500
+
+
+def _near(a: Place, b: Place) -> bool:
+    """두 장소가 SUB_FACILITY_M 안인지. 좌표가 없으면 주소가 같을 때만 가깝다고 본다."""
+    if None not in (a.latitude, a.longitude, b.latitude, b.longitude):
+        return haversine_m(a.latitude, a.longitude, b.latitude, b.longitude) <= SUB_FACILITY_M
+    return bool(a.address) and a.address == b.address
 
 
 class RecommendationService:
@@ -53,7 +64,22 @@ class RecommendationService:
             ranked.sort(key=lambda p: p.distance_m if p.distance_m is not None else float("inf"))
         else:
             ranked.sort(key=lambda p: (p.score, p.data_confidence), reverse=True)
+        # 같은 시설의 세부 시설이 결과를 채우지 않게 한다 (2026-11 '센텀 전시' 8곳 중 4곳이 벡스코).
+        # 특정 장소·브랜드 검색은 지점·세부 시설 목록이 필요한 결과라 적용하지 않는다.
+        if request.search_mode == "category":
+            ranked = self._skip_sub_facilities(ranked)
         return ranked[:limit]
+
+    @staticmethod
+    def _skip_sub_facilities(places: list[Place]) -> list[Place]:
+        """이미 고른 장소 이름 + 띄어쓰기로 시작하고 가까운 장소('벡스코 제1전시장')는 뺀다. 순서는 유지한다."""
+        kept: list[Place] = []
+        for place in places:
+            name = place.name.strip()
+            parent = next((k for k in kept if name.startswith(k.name.strip() + " ") and _near(k, place)), None)
+            if parent is None:
+                kept.append(place)
+        return kept
 
     @staticmethod
     def _within_radius(places: list[Place], anchor: tuple[float, float] | None, radius: float) -> list[Place]:

@@ -10,6 +10,8 @@
 Place.indoor가 없으면 업종 경로·장소 이름으로 추정하고(scoring.infer_indoor_with_name), 추정이 애매하면(None) 제거하지 않는다.
 
 전시 요청은 진행 중인 전시(Place.events)가 있는 장소만 남긴다. 그런 장소가 하나도 없으면 거르지 않는다.
+'해수욕장'·'박물관'처럼 장소 종류가 분명한 검색어(PLACE_KIND_QUERIES)면, 업종이나 이름에 그 말이 든 장소만 남긴다.
+맞는 곳이 2곳 미만이면 거르지 않는다 (비슷한 관광지로 채우던 '기장 해수욕장' → 오랑대·루지, 2026-11).
 축제·행사 요청은 오늘 열리고 있다고 기간이 확인된 곳(Place.events)만 남긴다. 하나도 없으면 결과 없음으로 둔다
 (카카오·네이버의 '○○축제' 장소는 기간이 없어 이미 끝난 축제일 수 있다).
 """
@@ -21,6 +23,18 @@ from app.schemas.place import Place
 from app.services.scoring import (
     AMENITY_WORDS, category_path, infer_categories, infer_indoor_with_name, is_amenity, related_categories,
 )
+
+# 장소 종류가 분명한 검색어 → 업종·이름에서 찾을 말. 이 목록에 있는 검색어에만 '맞는 장소만 남기기'를 적용한다.
+# ('서핑'은 카카오 업종이 '수상스포츠'뿐이고 '전시'는 미술관에서도 열려서, 목록 밖 검색어는 거르지 않는다.)
+PLACE_KIND_QUERIES = {
+    "해수욕장": ("해수욕장", "해변"), "해변": ("해수욕장", "해변"),
+    "박물관": ("박물관",), "미술관": ("미술관", "갤러리"), "과학관": ("과학관",), "도서관": ("도서관",),
+    "공원": ("공원",), "수목원": ("수목원",), "전망대": ("전망대",), "등대": ("등대",), "시장": ("시장",),
+    "사찰": ("사찰",), "절": ("사찰",), "아쿠아리움": ("아쿠아리움",), "테마파크": ("테마파크", "놀이공원"),
+    "방탈출": ("방탈출",), "볼링장": ("볼링",), "찜질방": ("찜질방", "사우나"),
+}
+# 맞는 장소가 이보다 적으면 거르지 않는다 (한 곳만 보여주기보다 비슷한 곳도 함께 보여준다)
+MIN_KIND_MATCHES = 2
 
 
 class HardFilter:
@@ -52,7 +66,20 @@ class HardFilter:
             kept = [place for place in kept if place.closed_today is not True]
         if wants_festival(request):
             kept = [place for place in kept if any(e.get("kind") == "festival" for e in place.events)]
-        return kept
+        return self._keep_requested_kind(request, kept)
+
+    @staticmethod
+    def _keep_requested_kind(request: PlaceRequest, places: list[Place]) -> list[Place]:
+        """'해수욕장'처럼 장소 종류가 분명한 검색어면 그 말이 업종·이름에 든 곳만 남긴다.
+
+        메뉴 이름('텐동')이나 활동('서핑')은 업종에 그 말이 없는 맞는 장소가 많아 목록에 넣지 않는다.
+        """
+        words = PLACE_KIND_QUERIES.get(request.query.strip())
+        if request.search_mode != "category" or not words:
+            return places
+        matched = [p for p in places
+                   if any(w in f"{p.name} {category_path(p.source_categories, p.subcategory)}" for w in words)]
+        return matched if len(matched) >= MIN_KIND_MATCHES else places
 
     @staticmethod
     def _other_indoor(wanted: bool, place: Place) -> bool:

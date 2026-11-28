@@ -77,5 +77,15 @@ class RealDataTest(unittest.TestCase):
         # 검색어가 부대시설이면 남긴다
         self.assertEqual(names(self.m.related_branches("광안리 공영주차장", places)), ["광안리 공영주차장"])
 
+class BusanCampusTest(unittest.TestCase):
+    def test_campus_outside_busan_excluded(self):
+        """2026-11 실제: 양산캠퍼스 주소에 도로 이름 '부산대학로'가 있어 부산 주소로 잘못 통과했다."""
+        places = [Place(name="부산대학교 부산캠퍼스", address="부산 금정구 부산대학로63번길 2"),
+                  Place(name="부산대학교 양산캠퍼스", address="경상남도 양산시 물금읍 부산대학로 49"),
+                  Place(name="부산대학교 밀양캠퍼스")]  # 주소가 없으면 판단하지 않고 남긴다
+        names = [p.name for p in ExactPlaceMatcher().institution_locations("부산대학교", places)]
+        self.assertEqual(names, ["부산대학교 부산캠퍼스", "부산대학교 밀양캠퍼스"])
+
+
 if __name__ == "__main__":
     unittest.main()
